@@ -72,7 +72,11 @@ fn output_schema() -> Value {
                         },
                         "uncertainties": { "type": "array", "items": { "type": "string" } },
                         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                        "session_ids": { "type": "array", "items": { "type": "string" } }
+                        "session_ids": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Bare id values of the sessions this achievement draws from (the sessions[].id field, not the session: ref)"
+                        }
                     },
                     "required": ["title", "contribution", "outcomes", "confidence", "session_ids"]
                 }
@@ -126,7 +130,7 @@ const EVALUATOR_PROMPT: &str = r#"You are the evaluator for Z Report, a private 
 Reconstruct the day's accomplishments as achievements a developer would be proud to put in a standup or performance review. Follow these rules strictly:
 
 1. Celebrate outcomes, not activity. "Fixed flaky auth test that blocked CI" is an achievement; "ran 14 commands" is not.
-2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread. Use each session at most once.
+2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
 3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "commit:…"). Never invent refs.
 4. Assign each claim the highest evidence level the cited refs support:
    1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit.

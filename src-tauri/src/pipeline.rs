@@ -208,6 +208,16 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
     Ok(total_candidates)
 }
 
+fn ref_session_id(r: &str) -> Option<&str> {
+    if let Some(rest) = r.strip_prefix("session:") {
+        Some(rest)
+    } else if let Some(rest) = r.strip_prefix("cmd:") {
+        rest.rsplit_once(':').map(|(sid, _)| sid)
+    } else {
+        None
+    }
+}
+
 fn build_candidates(
     day: &str,
     sessions: &[SessionFacts],
@@ -216,8 +226,29 @@ fn build_candidates(
 ) -> Vec<Candidate> {
     let mut out = Vec::new();
     for (i, mut a) in achievements.into_iter().enumerate() {
-        a.session_ids
-            .retain(|id| sessions.iter().any(|s| &s.session_id == id));
+        // The model sometimes fills session_ids with "session:<id>" refs, or
+        // cites sessions only via outcome evidence_refs; an exact-id match
+        // here silently discarded whole achievements.
+        let mut ids: Vec<String> = a
+            .session_ids
+            .iter()
+            .map(|id| id.strip_prefix("session:").unwrap_or(id))
+            .filter(|id| sessions.iter().any(|s| s.session_id == *id))
+            .map(String::from)
+            .collect();
+        if ids.is_empty() {
+            ids = a
+                .outcomes
+                .iter()
+                .flat_map(|o| o.evidence_refs.iter())
+                .filter_map(|r| ref_session_id(r))
+                .filter(|id| sessions.iter().any(|s| s.session_id == *id))
+                .map(String::from)
+                .collect();
+        }
+        ids.sort();
+        ids.dedup();
+        a.session_ids = ids;
         if a.session_ids.is_empty() {
             continue;
         }
@@ -306,12 +337,35 @@ mod tests {
                 confidence: 0.9,
                 session_ids: vec!["unknown".into()],
             },
+            Achievement {
+                title: "Ref-form ids".into(),
+                contribution: "…".into(),
+                outcomes: vec![],
+                uncertainties: vec![],
+                confidence: 0.8,
+                session_ids: vec!["session:s1".into()],
+            },
+            Achievement {
+                title: "Ids only in refs".into(),
+                contribution: "…".into(),
+                outcomes: vec![Outcome {
+                    claim: "Tests pass".into(),
+                    evidence_level: 3,
+                    evidence_refs: vec!["cmd:s1:0".into()],
+                    verified: false,
+                }],
+                uncertainties: vec![],
+                confidence: 0.8,
+                session_ids: vec!["unknown".into()],
+            },
         ];
         let cands = build_candidates("2026-07-20", &sessions, achievements, Some("claude-opus-4-8".into()));
-        assert_eq!(cands.len(), 1);
+        assert_eq!(cands.len(), 3);
         // Claimed commit-level (4) but only a passing test ref: downgraded to 3, flagged.
         assert_eq!(cands[0].evidence_level, 3);
         assert!(!cands[0].outcomes[0].verified);
         assert!(!cands[0].uncertainties.is_empty());
+        assert_eq!(cands[1].session_ids, vec!["s1".to_string()]);
+        assert_eq!(cands[2].session_ids, vec!["s1".to_string()]);
     }
 }
