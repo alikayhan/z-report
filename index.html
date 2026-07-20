@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Z Report</title>
+  </head>
+  <body>
+    <div id="panel">
+      <header id="header" data-tauri-drag-region>
+        <div class="masthead" data-tauri-drag-region>
+          <span class="wordmark" data-tauri-drag-region>Z&thinsp;REPORT</span>
+          <span class="header-actions">
+            <button id="btn-pin" class="icon-btn" title="Keep window open" aria-label="Keep window open" aria-pressed="false">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5l4 4-1.8.6-2.5 2.5-.3 3.4-2.4-2.4L3 14l-.9-.9 3.4-3.5-2.4-2.4 3.4-.3L9 4.3z"/></svg>
+            </button>
+            <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/></svg>
+            </button>
+          </span>
+        </div>
+        <div class="eyebrow" data-tauri-drag-region>
+          <span id="status-line">·</span>
+          <span id="evaluating" class="evaluating" hidden>reading the tape<span class="dots"><i>.</i><i>.</i><i>.</i></span></span>
+        </div>
+      </header>
+
+      <nav id="tabs" aria-label="Views">
+        <button class="tab active" data-view="review">Review<span id="badge-pending" class="badge" hidden></span></button>
+        <button class="tab" data-view="journal">Journal</button>
+        <button class="tab" data-view="export">Export</button>
+      </nav>
+
+      <main id="content" tabindex="-1"></main>
+
+      <footer id="footer">
+        <span class="footer-note">All data stays on this Mac</span>
+        <span id="footer-model" class="footer-model"></span>
+      </footer>
+    </div>
+    <div id="merge-bar" hidden>
+      <span id="merge-count"></span>
+      <button id="btn-merge" class="key key-primary">Merge into one</button>
+      <button id="btn-merge-cancel" class="key key-quiet">Cancel</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

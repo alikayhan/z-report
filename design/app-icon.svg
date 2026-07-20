@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="housing" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1D2822"/>
+      <stop offset="1" stop-color="#0C110E"/>
+    </linearGradient>
+    <filter id="drop" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#housing)"/>
+  <g transform="rotate(-4 512 490)" filter="url(#drop)">
+    <path fill="#F7F2E6" d="M320,180 H704 V744
+      L680,772 L656,744 L632,772 L608,744 L584,772 L560,744 L536,772 L512,744
+      L488,772 L464,744 L440,772 L416,744 L392,772 L368,744 L344,772 L320,744 Z"/>
+    <g fill="#29241A">
+      <rect x="432" y="216" width="160" height="22" rx="6"/>
+      <path d="M360,268 H664 V276 H360 Z" fill="none"/>
+      <line x1="360" y1="272" x2="664" y2="272" stroke="#29241A" stroke-width="8" stroke-dasharray="18 14"/>
+      <path d="M400,320 H624 V374 L500,546 H624 V600 H400 V546 L524,374 H400 Z"/>
+      <line x1="360" y1="644" x2="664" y2="644" stroke="#29241A" stroke-width="8" stroke-dasharray="18 14"/>
+      <rect x="360" y="676" width="128" height="22" rx="6" opacity="0.8"/>
+      <rect x="560" y="676" width="104" height="22" rx="6" opacity="0.8"/>
+    </g>
+  </g>
+  <g transform="rotate(-12 676 668)" opacity="0.92">
+    <circle cx="676" cy="668" r="112" fill="none" stroke="#574FBE" stroke-width="16"/>
+    <circle cx="676" cy="668" r="82" fill="none" stroke="#574FBE" stroke-width="7"/>
+    <path d="M628,668 L664,704 L730,626" fill="none" stroke="#574FBE" stroke-width="22"
+      stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
