@@ -56,14 +56,14 @@ fn output_schema() -> Value {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "title": { "type": "string" },
-                        "contribution": { "type": "string" },
+                        "title": { "type": "string", "description": "Short, specific, outcome-first statement; max ~70 characters." },
+                        "contribution": { "type": "string", "description": "At most 2-3 plain sentences a teammate who wasn't there could understand: what was done and why it mattered. No jargon or filler; let the outcome bullets carry the specifics." },
                         "outcomes": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "claim": { "type": "string" },
+                                    "claim": { "type": "string", "description": "One concrete outcome as a single scannable bullet line, understandable on its own." },
                                     "evidence_level": { "type": "integer", "minimum": 1, "maximum": 4 },
                                     "evidence_refs": { "type": "array", "items": { "type": "string" } }
                                 },
@@ -136,7 +136,7 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
    1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit.
    Never claim level 3 without a succeeded test/build/check ref; never claim level 4 without a commit ref.
 5. State uncertainties honestly (e.g. "tests were not run", "change not committed"). Do not speculate about production impact.
-6. Write titles as short, specific, outcome-first statements (max ~70 chars). Write the contribution as 2-4 sentences describing what the developer did and why it mattered.
+6. Keep each achievement brief and legible to someone who wasn't there — a teammate or manager skimming a standup. Title: a short, specific, outcome-first statement (max ~70 chars). Contribution: at most 2-3 plain sentences saying what the developer did and why it mattered — no jargon or filler. Keep each outcome claim to a single scannable bullet line; let the bullets, not the prose, carry the specifics.
 7. Confidence is your honest probability that the developer would recognize this as a real, correctly described accomplishment.
 8. Skip noise: exploratory sessions with no output can be omitted or grouped into one low-confidence "investigation" achievement if the investigation itself was substantial.
 
