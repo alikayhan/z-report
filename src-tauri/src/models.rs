@@ -116,9 +116,9 @@ pub struct Settings {
     pub scan_interval_min: u32,
     pub retain_prompts: bool,
     pub excluded_repos: Vec<String>,
-    pub max_budget_usd: f64,
     pub claude_path: Option<String>,
     pub retention_days: u32,
+    pub cost_limit_enabled: bool,
 }
 
 impl Default for Settings {
@@ -128,9 +128,9 @@ impl Default for Settings {
             scan_interval_min: 30,
             retain_prompts: true,
             excluded_repos: Vec::new(),
-            max_budget_usd: 3.0,
             claude_path: None,
             retention_days: 90,
+            cost_limit_enabled: true,
         }
     }
 }

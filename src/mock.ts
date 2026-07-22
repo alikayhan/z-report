@@ -79,9 +79,9 @@ const settings: Settings = {
   scan_interval_min: 30,
   retain_prompts: true,
   excluded_repos: [],
-  max_budget_usd: 3,
   claude_path: null,
   retention_days: 90,
+  cost_limit_enabled: true,
 };
 
 const runs: EvalRun[] = [

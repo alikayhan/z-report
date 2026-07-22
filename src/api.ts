@@ -66,9 +66,9 @@ export interface Settings {
   scan_interval_min: number;
   retain_prompts: boolean;
   excluded_repos: string[];
-  max_budget_usd: number;
   claude_path: string | null;
   retention_days: number;
+  cost_limit_enabled: boolean;
 }
 
 export interface Overview {

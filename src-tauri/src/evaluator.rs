@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 pub const EVAL_MODEL: &str = "claude-opus-4-8";
 pub const EVAL_EFFORT: &str = "xhigh";
 const EVAL_TIMEOUT: Duration = Duration::from_secs(900);
+/// Hard per-run stop passed to `claude -p --max-budget-usd`: a safety valve for
+/// a runaway evaluation, not a user setting. Real days cost cents to ~$1, and on
+/// a subscription it caps estimated work rather than money.
+const MAX_BUDGET_USD: f64 = 5.0;
 
 pub struct EvalResult {
     pub achievements: Vec<Achievement>,
@@ -187,33 +191,37 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
     )?;
 
     let schema = serde_json::to_string(&output_schema())?;
-    let budget = format!("{:.2}", settings.max_budget_usd.max(0.5));
+    let budget = format!("{:.2}", MAX_BUDGET_USD);
+    let mut args: Vec<&str> = vec![
+        "-p",
+        EVALUATOR_PROMPT,
+        "--model",
+        EVAL_MODEL,
+        "--effort",
+        EVAL_EFFORT,
+        "--output-format",
+        "json",
+        "--json-schema",
+        &schema,
+        "--tools",
+        "Read,Grep,Glob",
+        "--disallowedTools",
+        "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+    ];
+    // The cost limit is a user-toggled safety valve; when off the run is uncapped.
+    if settings.cost_limit_enabled {
+        args.push("--max-budget-usd");
+        args.push(&budget);
+    }
     // A stray ANTHROPIC_API_KEY would silently override the developer's
     // subscription login and bill per-token; the product promises neither.
     let mut child = Command::new(&claude)
         .env_remove("ANTHROPIC_API_KEY")
         .current_dir(&run_dir)
-        .args([
-            "-p",
-            EVALUATOR_PROMPT,
-            "--model",
-            EVAL_MODEL,
-            "--effort",
-            EVAL_EFFORT,
-            "--output-format",
-            "json",
-            "--json-schema",
-            &schema,
-            "--tools",
-            "Read,Grep,Glob",
-            "--disallowedTools",
-            "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
-            "--no-session-persistence",
-            "--setting-sources",
-            "",
-            "--max-budget-usd",
-            &budget,
-        ])
+        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
@@ -297,7 +305,7 @@ fn classify_failure(stdout: &str, stderr: &str) -> String {
     {
         "Could not reach Anthropic. Z-read will retry when you are back online.".into()
     } else if all.contains("budget") {
-        "Evaluation stopped at the configured cost budget. Raise it in Settings if this recurs.".into()
+        "Evaluation stopped at its per-run safety limit — an unusually large day. It will retry on the next read.".into()
     } else {
         format!("Evaluation failed: {}", excerpt(stderr.trim()))
     }
