@@ -353,6 +353,7 @@ function renderSettings() {
   const s = state.settings;
   if (!s) return;
   const o = state.overview;
+  const metered = o?.metered ?? false;
   content().innerHTML = `
     <div class="settings-section">
       <h3>Schedule</h3>
@@ -390,7 +391,7 @@ function renderSettings() {
         <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-4-8")} · xhigh</span>
       </div>
       <div class="setting-row">
-        <label for="set-cost-limit">Stop a run past a $5 cost limit</label>
+        <label for="set-cost-limit">${metered ? "Stop a run past a $5 cost limit" : "Stop a run past a high usage limit"}</label>
         <input type="checkbox" id="set-cost-limit" ${s.cost_limit_enabled ? "checked" : ""}>
       </div>
       <p class="setting-hint">A safety valve on any single evaluation. Turn off to let a run finish no matter how large (uncapped).</p>
