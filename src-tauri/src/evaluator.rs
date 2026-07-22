@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 pub const EVAL_MODEL: &str = "claude-opus-4-8";
 pub const EVAL_EFFORT: &str = "xhigh";
 const EVAL_TIMEOUT: Duration = Duration::from_secs(900);
-/// Hard per-run stop passed to `claude -p --max-budget-usd`: a safety valve for
-/// a runaway evaluation, not a user setting. Real days cost cents to ~$1, and on
-/// a subscription it caps estimated work rather than money.
+/// Hard per-run safety stop for a runaway evaluation, not a money budget: on a
+/// subscription `--max-budget-usd` caps estimated work, not dollars spent.
 const MAX_BUDGET_USD: f64 = 5.0;
 
 pub struct EvalResult {
@@ -51,21 +50,21 @@ pub fn find_claude(settings: &Settings) -> Result<PathBuf> {
     bail!("Claude Code CLI not found. Install it or set its path in Settings.")
 }
 
-/// Whether the developer's runs are billed per-token (an API key) rather than
-/// covered by a Claude subscription. A subscription's cost figures are only
-/// API-equivalent estimates, never money spent, so the UI must not present them
-/// as charges. Detection mirrors the evaluator's own environment
-/// (ANTHROPIC_API_KEY removed) so it reflects the auth the run actually uses;
-/// anything we cannot confirm as an API key is treated as not metered.
+/// A `claude` invocation with ANTHROPIC_API_KEY stripped, so every run uses the
+/// developer's subscription login rather than silently billing an API key.
+fn claude_command(settings: &Settings) -> Result<Command> {
+    let mut cmd = Command::new(find_claude(settings)?);
+    cmd.env_remove("ANTHROPIC_API_KEY");
+    Ok(cmd)
+}
+
+/// True only when runs are billed per-token (an API key); a subscription's cost
+/// is an estimate, not money. Auth we cannot confirm as an API key is not metered.
 pub fn is_metered(settings: &Settings) -> bool {
-    let Ok(claude) = find_claude(settings) else {
+    let Ok(mut cmd) = claude_command(settings) else {
         return false;
     };
-    let Ok(out) = Command::new(&claude)
-        .env_remove("ANTHROPIC_API_KEY")
-        .args(["auth", "status", "--json"])
-        .output()
-    else {
+    let Ok(out) = cmd.args(["auth", "status", "--json"]).output() else {
         return false;
     };
     if !out.status.success() {
@@ -177,7 +176,7 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
 Return only the structured output."#;
 
 pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -> Result<EvalResult> {
-    let claude = find_claude(settings)?;
+    let mut cmd = claude_command(settings)?;
     let run_dir = store::data_dir().join("eval").join(format!(
         "{}-{}",
         day,
@@ -211,15 +210,11 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
         "--setting-sources",
         "",
     ];
-    // The cost limit is a user-toggled safety valve; when off the run is uncapped.
     if settings.cost_limit_enabled {
         args.push("--max-budget-usd");
         args.push(&budget);
     }
-    // A stray ANTHROPIC_API_KEY would silently override the developer's
-    // subscription login and bill per-token; the product promises neither.
-    let mut child = Command::new(&claude)
-        .env_remove("ANTHROPIC_API_KEY")
+    let mut child = cmd
         .current_dir(&run_dir)
         .args(&args)
         .stdout(Stdio::piped())

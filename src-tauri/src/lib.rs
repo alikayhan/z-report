@@ -48,8 +48,7 @@ pub fn run() {
                 metered: Mutex::new(None),
             });
 
-            // Probe billing mode off-thread so launch never blocks on the CLI;
-            // the UI hides cost until this confirms per-token (API-key) billing.
+            // Probe billing mode off-thread so launch never blocks on the CLI.
             let detect = app.handle().clone();
             std::thread::spawn(move || {
                 let settings = detect.state::<AppState>().store.lock().unwrap().settings();
