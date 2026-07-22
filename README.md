@@ -62,7 +62,7 @@ session's change list. Unsupported claims are downgraded and labeled.
   using Claude Code itself. This is disclosed in Settings.
 - The evaluator is sandboxed: fresh ephemeral run, read-only tool allowlist
   (`Read,Grep,Glob`), working directory containing only the evidence package,
-  no session persistence, no user settings, and a per-run cost ceiling.
+  no session persistence, no user settings, and an optional per-run safety cap.
 - Prompt excerpts in evidence are optional (Settings → Privacy). Full transcripts
   are never copied — only referenced. Retention is user-controlled, and
   "Delete all data" erases everything.
@@ -91,8 +91,9 @@ Verified against Claude Code 2.1.215:
 - `--json-schema` yields a validated `structured_output` object matching the
   achievement contract (no output parsing heuristics).
 - `--tools "Read,Grep,Glob" --disallowedTools ... --no-session-persistence
-  --setting-sources "" --max-budget-usd N` provide read-only, ephemeral, cost-capped
-  isolation; permission denials are visible in the result.
+  --setting-sources ""` provide read-only, ephemeral isolation; `--max-budget-usd`
+  adds a fixed per-run safety cap when the cost limit is enabled. Permission denials
+  are visible in the result.
 - Transcript JSONL records are typed (`user`, `assistant`, `system`, attachments,
   snapshots); parsing is defensive because the schema is internal to Claude Code and
   undocumented. Records carry `cwd`, `gitBranch`, `version`, and timestamps used for
