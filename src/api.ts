@@ -82,6 +82,7 @@ export interface Overview {
   today: string;
   model: string;
   claude_found: boolean;
+  metered: boolean;
 }
 
 export const api = {

@@ -353,6 +353,7 @@ function renderSettings() {
   const s = state.settings;
   if (!s) return;
   const o = state.overview;
+  const metered = o?.metered ?? false;
   content().innerHTML = `
     <div class="settings-section">
       <h3>Schedule</h3>
@@ -390,9 +391,10 @@ function renderSettings() {
         <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-4-8")} · xhigh</span>
       </div>
       <div class="setting-row">
-        <label for="set-budget">Cost ceiling per run (USD)</label>
+        <label for="set-budget">${metered ? "Cost ceiling per run (USD)" : "Per-run safety cap"}</label>
         <input type="number" id="set-budget" min="0.5" max="50" step="0.5" value="${s.max_budget_usd}">
       </div>
+      ${metered ? "" : `<p class="setting-hint">A guardrail that stops a long run early. On your subscription these runs aren't billed per use.</p>`}
       <div class="boundary-note">
         <strong>What leaves this Mac:</strong> evaluation runs on your own Claude Code
         account and sends the prepared evidence package (session excerpts, file paths,
@@ -445,8 +447,9 @@ async function loadRuns() {
     runsCache = "";
     return;
   }
+  const metered = state.overview?.metered ?? false;
   runsCache = `<table class="runs-table">
-    <tr><th>Day</th><th>Kind</th><th>Model</th><th>Cost</th><th>Slips</th><th></th></tr>
+    <tr><th>Day</th><th>Kind</th><th>Model</th>${metered ? "<th>Cost</th>" : ""}<th>Slips</th><th></th></tr>
     ${runs
       .slice(0, 8)
       .map(
@@ -454,13 +457,13 @@ async function loadRuns() {
           <td>${esc(r.day.slice(5))}</td>
           <td>${esc(r.kind)}</td>
           <td>${esc(r.model ?? "—")}</td>
-          <td>${r.cost_usd != null ? "$" + r.cost_usd.toFixed(2) : "—"}</td>
+          ${metered ? `<td>${r.cost_usd != null ? "$" + r.cost_usd.toFixed(2) : "—"}</td>` : ""}
           <td>${r.candidate_count}</td>
           <td class="${r.status === "ok" ? "ok" : "err"}" title="${esc(r.error ?? "")}">${esc(r.status)}</td>
         </tr>`
       )
       .join("")}
-  </table>`;
+  </table>${metered ? "" : `<p class="setting-hint">Runs are included in your Claude subscription — no per-run charge.</p>`}`;
 }
 
 /* ---------- merge bar ---------- */

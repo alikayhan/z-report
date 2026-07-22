@@ -47,6 +47,36 @@ pub fn find_claude(settings: &Settings) -> Result<PathBuf> {
     bail!("Claude Code CLI not found. Install it or set its path in Settings.")
 }
 
+/// Whether the developer's runs are billed per-token (an API key) rather than
+/// covered by a Claude subscription. A subscription's cost figures are only
+/// API-equivalent estimates, never money spent, so the UI must not present them
+/// as charges. Detection mirrors the evaluator's own environment
+/// (ANTHROPIC_API_KEY removed) so it reflects the auth the run actually uses;
+/// anything we cannot confirm as an API key is treated as not metered.
+pub fn is_metered(settings: &Settings) -> bool {
+    let Ok(claude) = find_claude(settings) else {
+        return false;
+    };
+    let Ok(out) = Command::new(&claude)
+        .env_remove("ANTHROPIC_API_KEY")
+        .args(["auth", "status", "--json"])
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    auth_is_metered(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn auth_is_metered(stdout: &str) -> bool {
+    serde_json::from_str::<Value>(stdout.trim())
+        .ok()
+        .and_then(|v| v["authMethod"].as_str().map(|m| m == "api-key"))
+        .unwrap_or(false)
+}
+
 fn output_schema() -> Value {
     json!({
         "type": "object",
@@ -309,5 +339,15 @@ mod tests {
     fn classifies_auth_failure() {
         let msg = classify_failure("", "Error: not logged in — please run /login");
         assert!(msg.contains("not authenticated"));
+    }
+
+    #[test]
+    fn only_api_key_auth_is_metered() {
+        assert!(auth_is_metered(r#"{"loggedIn":true,"authMethod":"api-key"}"#));
+        assert!(!auth_is_metered(
+            r#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"team"}"#
+        ));
+        assert!(!auth_is_metered(r#"{"loggedIn":false}"#));
+        assert!(!auth_is_metered("not json"));
     }
 }

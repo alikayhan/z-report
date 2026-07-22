@@ -23,6 +23,7 @@ pub struct Overview {
     pub today: String,
     pub model: String,
     pub claude_found: bool,
+    pub metered: bool,
 }
 
 #[tauri::command]
@@ -41,6 +42,7 @@ pub fn overview(state: State<AppState>) -> CmdResult<Overview> {
         today: pipeline::today(),
         model: evaluator::EVAL_MODEL.into(),
         claude_found: evaluator::find_claude(&settings).is_ok(),
+        metered: (*state.metered.lock().unwrap()).unwrap_or(false),
     })
 }
 

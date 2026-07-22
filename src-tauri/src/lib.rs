@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_positioner::{Position, WindowExt};
 
 fn toggle_window(app: &AppHandle) {
@@ -45,6 +45,17 @@ pub fn run() {
                 store: Mutex::new(store),
                 evaluating: AtomicBool::new(false),
                 pinned: AtomicBool::new(false),
+                metered: Mutex::new(None),
+            });
+
+            // Probe billing mode off-thread so launch never blocks on the CLI;
+            // the UI hides cost until this confirms per-token (API-key) billing.
+            let detect = app.handle().clone();
+            std::thread::spawn(move || {
+                let settings = detect.state::<AppState>().store.lock().unwrap().settings();
+                let metered = evaluator::is_metered(&settings);
+                *detect.state::<AppState>().metered.lock().unwrap() = Some(metered);
+                let _ = detect.emit("zr:refresh", ());
             });
 
             let open = MenuItem::with_id(app, "open", "Open Z Report", true, None::<&str>)?;

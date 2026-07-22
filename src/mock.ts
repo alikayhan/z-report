@@ -117,6 +117,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         today,
         model: "claude-opus-4-8",
         claude_found: true,
+        metered: false,
       } satisfies Overview);
     case "candidates":
       return respond((args?.status === "discarded" ? discarded : candidates).filter((c) => true));
