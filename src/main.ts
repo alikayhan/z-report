@@ -448,7 +448,7 @@ async function loadRuns() {
   }
   const metered = state.overview?.metered ?? false;
   runsCache = `<table class="runs-table">
-    <tr><th>Day</th><th>Kind</th><th>Model</th>${metered ? "<th>Cost</th>" : ""}<th>Slips</th><th></th></tr>
+    <tr><th>Day</th><th>Kind</th><th>Model</th>${metered ? "<th>Cost</th>" : ""}<th>Found</th><th></th></tr>
     ${runs
       .slice(0, 8)
       .map(
@@ -471,7 +471,7 @@ function updateMergeBar() {
   const bar = $("#merge-bar");
   const n = state.selection.size;
   bar.hidden = n < 2;
-  if (n >= 2) $("#merge-count").textContent = `${n} slips selected`;
+  if (n >= 2) $("#merge-count").textContent = `${n} selected`;
 }
 
 /* ---------- actions ---------- */
