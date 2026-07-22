@@ -353,6 +353,7 @@ function renderSettings() {
   const s = state.settings;
   if (!s) return;
   const o = state.overview;
+  const metered = o?.metered ?? false;
   content().innerHTML = `
     <div class="settings-section">
       <h3>Schedule</h3>
@@ -390,9 +391,10 @@ function renderSettings() {
         <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-4-8")} · xhigh</span>
       </div>
       <div class="setting-row">
-        <label for="set-budget">Cost ceiling per run (USD)</label>
-        <input type="number" id="set-budget" min="0.5" max="50" step="0.5" value="${s.max_budget_usd}">
+        <label for="set-cost-limit">${metered ? "Stop a run past a $5 cost limit" : "Stop a run past a high usage limit"}</label>
+        <input type="checkbox" id="set-cost-limit" ${s.cost_limit_enabled ? "checked" : ""}>
       </div>
+      <p class="setting-hint">A safety valve on any single evaluation. Turn off to let a run finish no matter how large (uncapped).</p>
       <div class="boundary-note">
         <strong>What leaves this Mac:</strong> evaluation runs on your own Claude Code
         account and sends the prepared evidence package (session excerpts, file paths,
@@ -428,10 +430,10 @@ function renderSettings() {
   bind("set-scan", (v) => (state.settings!.scan_interval_min = Math.max(5, Number(v) || 30)));
   bind("set-prompts", (v) => (state.settings!.retain_prompts = v === "true"));
   bind("set-retention", (v) => (state.settings!.retention_days = Math.max(0, Number(v) || 0)));
-  bind("set-budget", (v) => (state.settings!.max_budget_usd = Math.max(0.5, Number(v) || 3)));
   bind("set-repos", (v) =>
     (state.settings!.excluded_repos = v.split("\n").map((l) => l.trim()).filter(Boolean))
   );
+  bind("set-cost-limit", (v) => (state.settings!.cost_limit_enabled = v === "true"));
 }
 
 let runsCache = "";
@@ -445,8 +447,9 @@ async function loadRuns() {
     runsCache = "";
     return;
   }
+  const metered = state.overview?.metered ?? false;
   runsCache = `<table class="runs-table">
-    <tr><th>Day</th><th>Kind</th><th>Model</th><th>Cost</th><th>Slips</th><th></th></tr>
+    <tr><th>Day</th><th>Kind</th><th>Model</th>${metered ? "<th>Cost</th>" : ""}<th>Found</th><th></th></tr>
     ${runs
       .slice(0, 8)
       .map(
@@ -454,13 +457,13 @@ async function loadRuns() {
           <td>${esc(r.day.slice(5))}</td>
           <td>${esc(r.kind)}</td>
           <td>${esc(r.model ?? "—")}</td>
-          <td>${r.cost_usd != null ? "$" + r.cost_usd.toFixed(2) : "—"}</td>
+          ${metered ? `<td>${r.cost_usd != null ? "$" + r.cost_usd.toFixed(2) : "—"}</td>` : ""}
           <td>${r.candidate_count}</td>
           <td class="${r.status === "ok" ? "ok" : "err"}" title="${esc(r.error ?? "")}">${esc(r.status)}</td>
         </tr>`
       )
       .join("")}
-  </table>`;
+  </table>${metered ? "" : `<p class="setting-hint">Runs are included in your Claude subscription — no per-run charge.</p>`}`;
 }
 
 /* ---------- merge bar ---------- */
@@ -469,7 +472,7 @@ function updateMergeBar() {
   const bar = $("#merge-bar");
   const n = state.selection.size;
   bar.hidden = n < 2;
-  if (n >= 2) $("#merge-count").textContent = `${n} slips selected`;
+  if (n >= 2) $("#merge-count").textContent = `${n} selected`;
 }
 
 /* ---------- actions ---------- */

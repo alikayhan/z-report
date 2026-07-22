@@ -79,9 +79,9 @@ const settings: Settings = {
   scan_interval_min: 30,
   retain_prompts: true,
   excluded_repos: [],
-  max_budget_usd: 3,
   claude_path: null,
   retention_days: 90,
+  cost_limit_enabled: true,
 };
 
 const runs: EvalRun[] = [
@@ -117,6 +117,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         today,
         model: "claude-opus-4-8",
         claude_found: true,
+        metered: false,
       } satisfies Overview);
     case "candidates":
       return respond((args?.status === "discarded" ? discarded : candidates).filter((c) => true));

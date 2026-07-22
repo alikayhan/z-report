@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 pub const EVAL_MODEL: &str = "claude-opus-4-8";
 pub const EVAL_EFFORT: &str = "xhigh";
 const EVAL_TIMEOUT: Duration = Duration::from_secs(900);
+/// Hard per-run safety stop for a runaway evaluation, not a money budget: on a
+/// subscription `--max-budget-usd` caps estimated work, not dollars spent.
+const MAX_BUDGET_USD: f64 = 5.0;
 
 pub struct EvalResult {
     pub achievements: Vec<Achievement>,
@@ -47,6 +50,36 @@ pub fn find_claude(settings: &Settings) -> Result<PathBuf> {
     bail!("Claude Code CLI not found. Install it or set its path in Settings.")
 }
 
+/// A `claude` invocation with ANTHROPIC_API_KEY stripped, so every run uses the
+/// developer's subscription login rather than silently billing an API key.
+fn claude_command(settings: &Settings) -> Result<Command> {
+    let mut cmd = Command::new(find_claude(settings)?);
+    cmd.env_remove("ANTHROPIC_API_KEY");
+    Ok(cmd)
+}
+
+/// True only when runs are billed per-token (an API key); a subscription's cost
+/// is an estimate, not money. Auth we cannot confirm as an API key is not metered.
+pub fn is_metered(settings: &Settings) -> bool {
+    let Ok(mut cmd) = claude_command(settings) else {
+        return false;
+    };
+    let Ok(out) = cmd.args(["auth", "status", "--json"]).output() else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    auth_is_metered(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn auth_is_metered(stdout: &str) -> bool {
+    serde_json::from_str::<Value>(stdout.trim())
+        .ok()
+        .and_then(|v| v["authMethod"].as_str().map(|m| m == "api-key"))
+        .unwrap_or(false)
+}
+
 fn output_schema() -> Value {
     json!({
         "type": "object",
@@ -56,14 +89,14 @@ fn output_schema() -> Value {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "title": { "type": "string" },
-                        "contribution": { "type": "string" },
+                        "title": { "type": "string", "description": "Short, specific, outcome-first statement; max ~70 characters." },
+                        "contribution": { "type": "string", "description": "At most 2-3 plain sentences a teammate who wasn't there could understand: what was done and why it mattered. No jargon or filler; let the outcome bullets carry the specifics." },
                         "outcomes": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "claim": { "type": "string" },
+                                    "claim": { "type": "string", "description": "One concrete outcome as a single scannable bullet line, understandable on its own." },
                                     "evidence_level": { "type": "integer", "minimum": 1, "maximum": 4 },
                                     "evidence_refs": { "type": "array", "items": { "type": "string" } }
                                 },
@@ -136,14 +169,14 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
    1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit.
    Never claim level 3 without a succeeded test/build/check ref; never claim level 4 without a commit ref.
 5. State uncertainties honestly (e.g. "tests were not run", "change not committed"). Do not speculate about production impact.
-6. Write titles as short, specific, outcome-first statements (max ~70 chars). Write the contribution as 2-4 sentences describing what the developer did and why it mattered.
+6. Keep each achievement brief and legible to someone who wasn't there — a teammate or manager skimming a standup. Title: a short, specific, outcome-first statement (max ~70 chars). Contribution: at most 2-3 plain sentences saying what the developer did and why it mattered — no jargon or filler. Keep each outcome claim to a single scannable bullet line; let the bullets, not the prose, carry the specifics.
 7. Confidence is your honest probability that the developer would recognize this as a real, correctly described accomplishment.
 8. Skip noise: exploratory sessions with no output can be omitted or grouped into one low-confidence "investigation" achievement if the investigation itself was substantial.
 
 Return only the structured output."#;
 
 pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -> Result<EvalResult> {
-    let claude = find_claude(settings)?;
+    let mut cmd = claude_command(settings)?;
     let run_dir = store::data_dir().join("eval").join(format!(
         "{}-{}",
         day,
@@ -157,33 +190,33 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
     )?;
 
     let schema = serde_json::to_string(&output_schema())?;
-    let budget = format!("{:.2}", settings.max_budget_usd.max(0.5));
-    // A stray ANTHROPIC_API_KEY would silently override the developer's
-    // subscription login and bill per-token; the product promises neither.
-    let mut child = Command::new(&claude)
-        .env_remove("ANTHROPIC_API_KEY")
+    let budget = format!("{:.2}", MAX_BUDGET_USD);
+    let mut args: Vec<&str> = vec![
+        "-p",
+        EVALUATOR_PROMPT,
+        "--model",
+        EVAL_MODEL,
+        "--effort",
+        EVAL_EFFORT,
+        "--output-format",
+        "json",
+        "--json-schema",
+        &schema,
+        "--tools",
+        "Read,Grep,Glob",
+        "--disallowedTools",
+        "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+    ];
+    if settings.cost_limit_enabled {
+        args.push("--max-budget-usd");
+        args.push(&budget);
+    }
+    let mut child = cmd
         .current_dir(&run_dir)
-        .args([
-            "-p",
-            EVALUATOR_PROMPT,
-            "--model",
-            EVAL_MODEL,
-            "--effort",
-            EVAL_EFFORT,
-            "--output-format",
-            "json",
-            "--json-schema",
-            &schema,
-            "--tools",
-            "Read,Grep,Glob",
-            "--disallowedTools",
-            "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
-            "--no-session-persistence",
-            "--setting-sources",
-            "",
-            "--max-budget-usd",
-            &budget,
-        ])
+        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
@@ -267,7 +300,7 @@ fn classify_failure(stdout: &str, stderr: &str) -> String {
     {
         "Could not reach Anthropic. Z-read will retry when you are back online.".into()
     } else if all.contains("budget") {
-        "Evaluation stopped at the configured cost budget. Raise it in Settings if this recurs.".into()
+        "Evaluation stopped at its per-run safety limit — an unusually large day. It will retry on the next read.".into()
     } else {
         format!("Evaluation failed: {}", excerpt(stderr.trim()))
     }
@@ -309,5 +342,15 @@ mod tests {
     fn classifies_auth_failure() {
         let msg = classify_failure("", "Error: not logged in — please run /login");
         assert!(msg.contains("not authenticated"));
+    }
+
+    #[test]
+    fn only_api_key_auth_is_metered() {
+        assert!(auth_is_metered(r#"{"loggedIn":true,"authMethod":"api-key"}"#));
+        assert!(!auth_is_metered(
+            r#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"team"}"#
+        ));
+        assert!(!auth_is_metered(r#"{"loggedIn":false}"#));
+        assert!(!auth_is_metered("not json"));
     }
 }
