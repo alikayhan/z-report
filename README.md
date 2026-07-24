@@ -30,7 +30,9 @@ Daily flow:
    Code transcripts, extracts facts (prompts, files changed, commands run, exit
    status), and correlates them with local Git state (repo, branch, your commits).
 2. **Z-read.** At your chosen time a notification announces the day's candidates
-   ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand.
+   ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
+   one evaluates every session from the last 15 days it hasn't evaluated yet, one
+   evaluator run per day, so a first run backfills about two weeks of work.
 3. **Confirm.** Approve, edit, merge, or discard each candidate. Nothing enters the
    journal without you.
 4. **Export.** Copy or save daily/weekly/custom-range Markdown summaries for
@@ -64,8 +66,10 @@ session's change list. Unsupported claims are downgraded and labeled.
   (`Read,Grep,Glob`), working directory containing only the evidence package,
   no session persistence, no user settings, and an optional per-run safety cap.
 - Prompt excerpts in evidence are optional (Settings → Privacy). Full transcripts
-  are never copied — only referenced. Retention is user-controlled, and
-  "Delete all data" erases everything.
+  are never copied — only referenced. The retention setting governs the review queue:
+  unreviewed candidates age out, approved entries stay. Extracted session facts are
+  kept for 90 days, and dropped once their transcript is gone. "Delete all data"
+  erases everything.
 
 ## Development
 

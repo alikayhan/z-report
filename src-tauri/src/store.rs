@@ -422,16 +422,31 @@ impl Store {
         Ok((pending, journal, sessions))
     }
 
-    pub fn prune_older_than(&self, min_day: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM sessions WHERE day < ?1",
-            params![min_day],
-        )?;
+    pub fn prune_candidates_older_than(&self, min_day: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM candidates WHERE day < ?1 AND status != 'approved'",
             params![min_day],
         )?;
         Ok(())
+    }
+
+    /// Only safe because `scan` skips these transcripts before parsing; else they churn.
+    pub fn prune_sessions_older_than(&self, min_day: &str) -> Result<usize> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM sessions WHERE day < ?1", params![min_day])?)
+    }
+
+    pub fn delete_sessions_missing_from(&self, live_ids: &[String]) -> Result<usize> {
+        // Empty means discovery failed, not that every transcript vanished.
+        if live_ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = vec!["?"; live_ids.len()].join(",");
+        let sql = format!("DELETE FROM sessions WHERE id NOT IN ({placeholders})");
+        Ok(self
+            .conn
+            .execute(&sql, rusqlite::params_from_iter(live_ids.iter()))?)
     }
 
     pub fn wipe_all(&self) -> Result<()> {
@@ -440,5 +455,94 @@ impl Store {
              DELETE FROM eval_runs; DELETE FROM kv;",
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(id: &str, day: &str, status: &str) -> Candidate {
+        Candidate {
+            id: id.into(),
+            day: day.into(),
+            title: "t".into(),
+            contribution: "c".into(),
+            outcomes: vec![],
+            uncertainties: vec![],
+            confidence: 0.5,
+            evidence_level: 1,
+            session_ids: vec!["s1".into()],
+            repo: None,
+            model: None,
+            status: status.into(),
+            created_at: "2026-06-01T09:00:00+02:00".into(),
+        }
+    }
+
+    #[test]
+    fn retention_prunes_stale_candidates_and_spares_evidence() {
+        let store = Store::open(":memory:").unwrap();
+        let facts = SessionFacts {
+            session_id: "s1".into(),
+            ..Default::default()
+        };
+        store.upsert_session(&facts, "2026-06-01", "h1").unwrap();
+        store
+            .insert_candidate(&candidate("c-stale", "2026-06-01", "pending"))
+            .unwrap();
+        store
+            .insert_candidate(&candidate("c-approved", "2026-06-01", "approved"))
+            .unwrap();
+        store
+            .insert_candidate(&candidate("c-recent", "2026-07-20", "pending"))
+            .unwrap();
+
+        store.prune_candidates_older_than("2026-07-03").unwrap();
+
+        assert!(store.session_hash("s1").is_some());
+
+        let pending: Vec<String> = store
+            .candidates_by_status("pending")
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(pending, vec!["c-recent".to_string()]);
+        assert_eq!(store.candidates_by_status("approved").unwrap().len(), 1);
+    }
+
+    fn session(id: &str) -> SessionFacts {
+        SessionFacts {
+            session_id: id.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn evidence_horizon_prunes_stale_sessions() {
+        let store = Store::open(":memory:").unwrap();
+        store.upsert_session(&session("old"), "2026-01-01", "h").unwrap();
+        store.upsert_session(&session("recent"), "2026-07-20", "h").unwrap();
+
+        assert_eq!(store.prune_sessions_older_than("2026-04-01").unwrap(), 1);
+        assert!(store.session_hash("old").is_none());
+        assert!(store.session_hash("recent").is_some());
+    }
+
+    #[test]
+    fn orphan_cleanup_spares_everything_when_discovery_returns_nothing() {
+        let store = Store::open(":memory:").unwrap();
+        store.upsert_session(&session("live"), "2026-07-20", "h").unwrap();
+        store.upsert_session(&session("orphan"), "2026-07-21", "h").unwrap();
+
+        assert_eq!(store.delete_sessions_missing_from(&[]).unwrap(), 0);
+        assert!(store.session_hash("live").is_some());
+        assert!(store.session_hash("orphan").is_some());
+
+        let live = vec!["live".to_string()];
+        assert_eq!(store.delete_sessions_missing_from(&live).unwrap(), 1);
+        assert!(store.session_hash("live").is_some());
+        assert!(store.session_hash("orphan").is_none());
     }
 }

@@ -376,10 +376,10 @@ function renderSettings() {
       </div>
       <p class="setting-hint">Off = only metadata (files, commands, commits) is stored and shown to the evaluator. Full transcripts are never copied; Z Report only references the session files Claude Code already keeps.</p>
       <div class="setting-row">
-        <label for="set-retention">Keep evidence for</label>
+        <label for="set-retention">Keep unreviewed candidates for</label>
         <input type="number" id="set-retention" min="0" max="3650" value="${s.retention_days}">
       </div>
-      <p class="setting-hint">Days. 0 keeps evidence forever. Approved journal entries are always kept.</p>
+      <p class="setting-hint">Days. 0 keeps them forever. Approved journal entries are always kept. Session evidence is never deleted — anything outside the 15-day evaluation window is simply ignored.</p>
       <label class="setting-hint" for="set-repos" style="display:block">Excluded repositories (one path per line)</label>
       <textarea class="repos" id="set-repos">${esc(s.excluded_repos.join("\n"))}</textarea>
     </div>

@@ -19,6 +19,7 @@ pub struct DiscoveredFile {
     pub path: PathBuf,
     pub session_id: String,
     pub content_hash: String,
+    pub mtime: u64,
 }
 
 pub fn discover() -> Vec<DiscoveredFile> {
@@ -50,6 +51,7 @@ pub fn discover() -> Vec<DiscoveredFile> {
                 session_id: stem.to_string(),
                 content_hash: format!("{}:{}", meta.len(), mtime),
                 path,
+                mtime,
             });
         }
     }
