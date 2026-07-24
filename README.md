@@ -19,7 +19,7 @@ transcript adapter (~/.claude/projects/*/*.jsonl) + Git evidence adapter
         ↓
 normalized local evidence store (SQLite)
         ↓
-constrained Claude evaluator (claude -p, Opus 4.8, xhigh effort)
+constrained Claude evaluator (claude -p, Opus 5, xhigh effort)
         ↓
 review queue → approved journal → Markdown export
 ```
@@ -85,7 +85,7 @@ fixture data (`src/mock.ts`).
 
 Verified against Claude Code 2.1.215:
 
-- `claude -p --model claude-opus-4-8 --effort xhigh --output-format json` returns a
+- `claude -p --model claude-opus-5 --effort xhigh --output-format json` returns a
   single JSON result whose `modelUsage` records the model that actually served the
   run — stored with every evaluation.
 - `--json-schema` yields a validated `structured_output` object matching the

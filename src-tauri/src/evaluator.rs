@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const EVAL_MODEL: &str = "claude-opus-4-8";
+pub const EVAL_MODEL: &str = "claude-opus-5";
 pub const EVAL_EFFORT: &str = "xhigh";
 const EVAL_TIMEOUT: Duration = Duration::from_secs(900);
 /// Hard per-run safety stop for a runaway evaluation, not a money budget: on a

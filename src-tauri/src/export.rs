@@ -74,7 +74,7 @@ mod tests {
             evidence_level: 3,
             session_ids: vec!["s1".into()],
             repo: None,
-            model: Some("claude-opus-4-8".into()),
+            model: Some("claude-opus-5".into()),
             approved_at: "2026-07-20T18:05:00+02:00".into(),
             edited: false,
         }];
