@@ -64,8 +64,10 @@ session's change list. Unsupported claims are downgraded and labeled.
   (`Read,Grep,Glob`), working directory containing only the evidence package,
   no session persistence, no user settings, and an optional per-run safety cap.
 - Prompt excerpts in evidence are optional (Settings → Privacy). Full transcripts
-  are never copied — only referenced. Retention is user-controlled, and
-  "Delete all data" erases everything.
+  are never copied — only referenced. The retention setting governs the review queue:
+  unreviewed candidates age out, approved entries stay. Extracted session facts are
+  kept for 90 days, and dropped once their transcript is gone. "Delete all data"
+  erases everything.
 
 ## Development
 

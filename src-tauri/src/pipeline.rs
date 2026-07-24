@@ -8,6 +8,9 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
+const EVIDENCE_HORIZON_DAYS: i64 = 90;
+const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
+
 pub struct AppState {
     pub store: Mutex<Store>,
     pub evaluating: AtomicBool,
@@ -29,10 +32,11 @@ fn day_offset(day: &str, days: i64) -> String {
 /// Discover transcripts, parse changed ones, correlate with Git, upsert facts.
 pub fn scan(app: &AppHandle) -> Result<u32> {
     let state = app.state::<AppState>();
+    let files = ingest::discover();
+    let live_ids: Vec<String> = files.iter().map(|f| f.session_id.clone()).collect();
     let (settings, known): (Settings, Vec<(String, Option<(String, String)>)>) = {
         let store = state.store.lock().unwrap();
         let settings = store.settings();
-        let files = ingest::discover();
         let known = files
             .iter()
             .map(|f| (f.session_id.clone(), store.session_hash(&f.session_id)))
@@ -40,8 +44,13 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
         (settings, known)
     };
 
+    let stale_before = chrono::Local::now().timestamp() - EVIDENCE_HORIZON_DAYS * 86_400;
     let mut updated = 0u32;
-    for file in ingest::discover() {
+    let removed;
+    for file in &files {
+        if (file.mtime as i64) < stale_before {
+            continue;
+        }
         let prior = known
             .iter()
             .find(|(id, _)| *id == file.session_id)
@@ -72,11 +81,15 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
         let store = state.store.lock().unwrap();
         if settings.retention_days > 0 {
             let min_day = day_offset(&today(), -(settings.retention_days as i64));
-            store.prune_older_than(&min_day)?;
+            store.prune_candidates_older_than(&min_day)?;
         }
+        let evidence_min_day =
+            day_offset(&today(), -(EVIDENCE_HORIZON_DAYS + EVIDENCE_PRUNE_SLACK_DAYS));
+        removed = store.prune_sessions_older_than(&evidence_min_day)?
+            + store.delete_sessions_missing_from(&live_ids)?;
         store.kv_set("last_scan_at", &chrono::Local::now().to_rfc3339())?;
     }
-    if updated > 0 {
+    if updated > 0 || removed > 0 {
         let _ = app.emit("zr:refresh", ());
     }
     Ok(updated)
