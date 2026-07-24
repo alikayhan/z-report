@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
+const EVAL_WINDOW_DAYS: i64 = 15;
 const EVIDENCE_HORIZON_DAYS: i64 = 90;
 const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 
@@ -149,7 +150,7 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
     let (settings, pending) = {
         let store = state.store.lock().unwrap();
         let today = today();
-        let min_day = day_offset(&today, -7);
+        let min_day = day_offset(&today, -(EVAL_WINDOW_DAYS - 1));
         (store.settings(), store.pending_sessions(&today, &min_day)?)
     };
 
@@ -309,6 +310,12 @@ fn build_candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eval_window_covers_fifteen_calendar_days() {
+        let min_day = day_offset("2026-07-24", -(EVAL_WINDOW_DAYS - 1));
+        assert_eq!(min_day, "2026-07-10");
+    }
 
     #[test]
     fn candidates_drop_unknown_sessions_and_verify_levels() {
