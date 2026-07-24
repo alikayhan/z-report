@@ -388,7 +388,7 @@ function renderSettings() {
       <h3>Evaluator</h3>
       <div class="setting-row">
         <label>Model</label>
-        <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-4-8")} · xhigh</span>
+        <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-5")} · xhigh</span>
       </div>
       <div class="setting-row">
         <label for="set-cost-limit">${metered ? "Stop a run past a $5 cost limit" : "Stop a run past a high usage limit"}</label>

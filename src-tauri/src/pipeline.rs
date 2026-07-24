@@ -361,7 +361,7 @@ mod tests {
                 session_ids: vec!["unknown".into()],
             },
         ];
-        let cands = build_candidates("2026-07-20", &sessions, achievements, Some("claude-opus-4-8".into()));
+        let cands = build_candidates("2026-07-20", &sessions, achievements, Some("claude-opus-5".into()));
         assert_eq!(cands.len(), 3);
         // Claimed commit-level (4) but only a passing test ref: downgraded to 3, flagged.
         assert_eq!(cands[0].evidence_level, 3);
