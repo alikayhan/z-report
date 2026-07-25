@@ -97,6 +97,7 @@ pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> Cm
         outcomes: c.outcomes.clone(),
         evidence_level: c.evidence_level,
         session_ids: c.session_ids.clone(),
+        pr_links: c.pr_links.clone(),
         repo: c.repo.clone(),
         model: c.model.clone(),
         approved_at: chrono::Local::now().to_rfc3339(),

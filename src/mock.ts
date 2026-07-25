@@ -76,6 +76,14 @@ const journal: JournalEntry[] = [
     ],
     evidence_level: 4,
     session_ids: ["s4"],
+    pr_links: [
+      {
+        number: 12,
+        url: "https://github.com/acme/z-report/pull/12",
+        repository: "acme/z-report",
+        ts: new Date(Date.now() - 82000000).toISOString(),
+      },
+    ],
     repo: "/Users/dev/z-report",
     model: "claude-opus-5",
     approved_at: new Date(Date.now() - 80000000).toISOString(),

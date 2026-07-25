@@ -47,6 +47,7 @@ export interface JournalEntry {
   outcomes: Outcome[];
   evidence_level: number;
   session_ids: string[];
+  pr_links: PrLink[];
   repo: string | null;
   model: string | null;
   approved_at: string;

@@ -152,6 +152,8 @@ pub struct JournalEntry {
     pub outcomes: Vec<Outcome>,
     pub evidence_level: u8,
     pub session_ids: Vec<String>,
+    #[serde(default)]
+    pub pr_links: Vec<PrLink>,
     pub repo: Option<String>,
     pub model: Option<String>,
     pub approved_at: String,

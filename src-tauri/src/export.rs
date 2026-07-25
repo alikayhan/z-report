@@ -49,6 +49,14 @@ pub fn to_markdown(entries: &[JournalEntry], from: &str, to: &str) -> String {
                     ));
                 }
             }
+            if !e.pr_links.is_empty() {
+                let links: Vec<String> = e
+                    .pr_links
+                    .iter()
+                    .map(|pr| format!("[{}#{}]({})", pr.repository, pr.number, pr.url))
+                    .collect();
+                md.push_str(&format!("\n{}\n", links.join(" · ")));
+            }
         }
     }
     md
@@ -73,6 +81,12 @@ mod tests {
             }],
             evidence_level: 3,
             session_ids: vec!["s1".into()],
+            pr_links: vec![PrLink {
+                number: 5159,
+                url: "https://github.com/acme/widgets/pull/5159".into(),
+                repository: "acme/widgets".into(),
+                ts: None,
+            }],
             repo: None,
             model: Some("claude-opus-5".into()),
             approved_at: "2026-07-20T18:05:00+02:00".into(),
@@ -83,5 +97,6 @@ mod tests {
         assert!(md.contains("### Fixed flaky auth test"));
         assert!(md.contains("✓ Auth test suite passes"));
         assert!(md.contains("Locally verified"));
+        assert!(md.contains("[acme/widgets#5159](https://github.com/acme/widgets/pull/5159)"));
     }
 }

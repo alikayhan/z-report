@@ -13,6 +13,19 @@ pub fn data_dir() -> PathBuf {
         .join("com.zreport.app")
 }
 
+/// SQLite cannot parameterize identifiers, so callers must pass literals.
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+        params![table, column],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn open_default() -> Result<Self> {
         let dir = data_dir();
@@ -59,6 +72,7 @@ impl Store {
                outcomes TEXT NOT NULL DEFAULT '[]',
                evidence_level INTEGER NOT NULL DEFAULT 1,
                session_ids TEXT NOT NULL DEFAULT '[]',
+               pr_links TEXT NOT NULL DEFAULT '[]',
                repo TEXT,
                model TEXT,
                approved_at TEXT NOT NULL,
@@ -86,18 +100,8 @@ impl Store {
              CREATE INDEX IF NOT EXISTS idx_candidates_day ON candidates(day);
              CREATE INDEX IF NOT EXISTS idx_journal_day ON journal(day);",
         )?;
-        let has_candidate_pr_links = conn.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM pragma_table_info('candidates') WHERE name='pr_links'
-            )",
-            [],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if !has_candidate_pr_links {
-            conn.execute(
-                "ALTER TABLE candidates ADD COLUMN pr_links TEXT NOT NULL DEFAULT '[]'",
-                [],
-            )?;
+        for table in ["candidates", "journal"] {
+            add_column_if_missing(&conn, table, "pr_links", "TEXT NOT NULL DEFAULT '[]'")?;
         }
         Ok(Self { conn })
     }
@@ -298,8 +302,8 @@ impl Store {
 
     pub fn insert_journal(&self, e: &JournalEntry) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO journal(id,day,title,contribution,outcomes,evidence_level,session_ids,repo,model,approved_at,edited)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO journal(id,day,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 e.id,
                 e.day,
@@ -308,6 +312,7 @@ impl Store {
                 serde_json::to_string(&e.outcomes)?,
                 e.evidence_level,
                 serde_json::to_string(&e.session_ids)?,
+                serde_json::to_string(&e.pr_links)?,
                 e.repo,
                 e.model,
                 e.approved_at,
@@ -319,7 +324,7 @@ impl Store {
 
     pub fn journal_range(&self, from: &str, to: &str, query: Option<&str>) -> Result<Vec<JournalEntry>> {
         let mut sql = String::from(
-            "SELECT id,day,title,contribution,outcomes,evidence_level,session_ids,repo,model,approved_at,edited
+            "SELECT id,day,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited
              FROM journal WHERE day>=?1 AND day<=?2",
         );
         if query.is_some() {
@@ -336,10 +341,11 @@ impl Store {
                 outcomes: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
                 evidence_level: r.get::<_, i64>(5)? as u8,
                 session_ids: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
-                repo: r.get(7)?,
-                model: r.get(8)?,
-                approved_at: r.get(9)?,
-                edited: r.get::<_, i64>(10)? != 0,
+                pr_links: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
+                repo: r.get(8)?,
+                model: r.get(9)?,
+                approved_at: r.get(10)?,
+                edited: r.get::<_, i64>(11)? != 0,
             })
         };
         let rows: Vec<JournalEntry> = if let Some(q) = query {
@@ -547,7 +553,39 @@ mod tests {
     }
 
     #[test]
-    fn adds_pr_links_column_to_existing_candidate_table() {
+    fn journal_pr_links_survive_approval() {
+        let store = Store::open(":memory:").unwrap();
+        let pr = PrLink {
+            number: 5159,
+            url: "https://github.com/acme/widgets/pull/5159".into(),
+            repository: "acme/widgets".into(),
+            ts: Some("2026-07-20T10:05:00Z".into()),
+        };
+        let entry = JournalEntry {
+            id: "j-pr".into(),
+            day: "2026-07-20".into(),
+            title: "t".into(),
+            contribution: "c".into(),
+            outcomes: vec![],
+            evidence_level: 4,
+            session_ids: vec!["s1".into()],
+            pr_links: vec![pr.clone()],
+            repo: None,
+            model: None,
+            approved_at: "2026-07-20T18:05:00+02:00".into(),
+            edited: false,
+        };
+
+        store.insert_journal(&entry).unwrap();
+        let loaded = store
+            .journal_range("2026-07-20", "2026-07-20", None)
+            .unwrap();
+
+        assert_eq!(loaded[0].pr_links, vec![pr]);
+    }
+
+    #[test]
+    fn adds_pr_links_column_to_existing_tables() {
         let path = std::env::temp_dir().join(format!(
             "zreport-legacy-{}-{}.db",
             std::process::id(),
@@ -559,21 +597,27 @@ mod tests {
                 "CREATE TABLE candidates (
                     id TEXT PRIMARY KEY,
                     day TEXT NOT NULL
-                );",
+                 );
+                 CREATE TABLE journal (
+                    id TEXT PRIMARY KEY,
+                    day TEXT NOT NULL
+                 );",
             )
             .unwrap();
         }
 
         let store = Store::open(&path).unwrap();
-        let count: i64 = store
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('candidates') WHERE name='pr_links'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
+        for table in ["candidates", "journal"] {
+            let count: i64 = store
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name='pr_links'",
+                    params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "{table} missing pr_links");
+        }
 
         drop(store);
         std::fs::remove_file(path).unwrap();
