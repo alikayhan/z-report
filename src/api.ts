@@ -15,6 +15,13 @@ export interface Outcome {
   verified: boolean;
 }
 
+export interface PrLink {
+  number: number;
+  url: string;
+  repository: string;
+  ts: string | null;
+}
+
 export interface Candidate {
   id: string;
   day: string;
@@ -25,6 +32,7 @@ export interface Candidate {
   confidence: number;
   evidence_level: number;
   session_ids: string[];
+  pr_links: PrLink[];
   repo: string | null;
   model: string | null;
   status: string;

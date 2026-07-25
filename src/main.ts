@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { api, inTauri, levelLabel, Candidate, JournalEntry, Overview, Settings } from "./api";
+import { api, inTauri, levelLabel, Candidate, JournalEntry, Overview, PrLink, Settings } from "./api";
 import "./styles.css";
 
 type View = "review" | "journal" | "export" | "settings";
@@ -98,6 +98,20 @@ function outcomeRow(o: { claim: string; evidence_level: number; verified: boolea
   </div>`;
 }
 
+function githubPrUrl(pr: PrLink): string | null {
+  const parts = pr.repository.split("/");
+  if (
+    parts.length !== 2 ||
+    parts.some((part) => !/^[a-zA-Z0-9_.-]+$/.test(part)) ||
+    !Number.isSafeInteger(pr.number) ||
+    pr.number <= 0
+  ) {
+    return null;
+  }
+  const expected = `https://github.com/${parts[0]}/${parts[1]}/pull/${pr.number}`;
+  return pr.url === expected ? expected : null;
+}
+
 function candidateCard(c: Candidate): string {
   if (state.editingId === c.id) return candidateEditCard(c);
   const selected = state.selection.has(c.id);
@@ -105,6 +119,14 @@ function candidateCard(c: Candidate): string {
   const uncertainties = c.uncertainties.length
     ? `<div class="uncertainties">${c.uncertainties.map((u) => esc(u)).join("<br>")}</div>`
     : "";
+  const prLinks = c.pr_links
+    .map((pr) => {
+      const href = githubPrUrl(pr);
+      return href
+        ? `<a class="pr-link" href="${href}" target="_blank" rel="noopener noreferrer">PR ${esc(pr.repository)}#${pr.number}</a>`
+        : "";
+    })
+    .join("");
   return `<article class="receipt ${selected ? "selected" : ""}" data-id="${c.id}">
     <div class="receipt-meta">
       <span>${esc(repoName(c.repo))}</span>
@@ -115,6 +137,7 @@ function candidateCard(c: Candidate): string {
     <hr class="receipt-rule">
     ${outcomes}
     ${uncertainties}
+    ${prLinks ? `<div class="pr-links">${prLinks}</div>` : ""}
     <hr class="receipt-rule">
     <div class="receipt-total">
       <span>${c.session_ids.length} session${c.session_ids.length === 1 ? "" : "s"}</span>

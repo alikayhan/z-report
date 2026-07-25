@@ -349,6 +349,21 @@ body {
   font-size: 12px;
 }
 
+.pr-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.pr-link {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .level-chip {
   flex: none;
   font-size: 9px;
