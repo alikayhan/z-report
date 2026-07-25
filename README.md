@@ -46,12 +46,20 @@ downgrades anything the evaluator overstated:
 1. **Work observed** — investigation or implementation appears in a session
 2. **Change produced** — a concrete local change exists
 3. **Locally verified** — a relevant test/build/check passed
-4. **Committed** — the change exists in a local commit
+4. **Committed** — the change exists in a local commit, or the session recorded a
+   pull request alongside a file change
 5. **Impact confirmed** — you manually confirmed a real-world outcome
 
 Verification is deterministic Rust code, not the model: commit refs are checked with
 `git cat-file`, command refs against recorded exit status, file refs against the
-session's change list. Unsupported claims are downgraded and labeled.
+session's change list, and pull request refs against links recorded in the session
+itself. Unsupported claims are downgraded and labeled.
+
+A recorded pull request proves the change was proposed, not that it merged — merge
+state is not knowable offline, so it never reaches level 5 on its own. It does keep an
+achievement at level 4 after a squash merge deletes the local commit. Links are carried
+through to the journal and Markdown export, and only canonical `github.com` pull request
+URLs are kept.
 
 ## Privacy and network boundary
 

@@ -140,6 +140,8 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
             if !pr.has_canonical_url() {
                 continue;
             }
+            // A PR opened after midnight files the session under the day the work
+            // finished, and widens the Git window to catch the commit just before it.
             if let Some(ts) = pr.ts.as_deref() {
                 update_timestamps(&mut facts, ts);
             }
