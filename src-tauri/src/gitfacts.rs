@@ -218,11 +218,13 @@ mod tests {
                 ok,
                 kind: kind.into(),
                 ts: None,
+                via_delegate: false,
             }],
             files_changed: vec![FileChange {
                 path: "/repo/src/lib.rs".into(),
                 tool: "Edit".into(),
                 count: 2,
+                via_delegate: false,
             }],
             ..Default::default()
         }

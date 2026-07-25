@@ -43,6 +43,8 @@ pub struct FileChange {
     pub path: String,
     pub tool: String,
     pub count: u32,
+    #[serde(default)]
+    pub via_delegate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +54,8 @@ pub struct CommandFact {
     pub ok: bool,
     pub kind: String,
     pub ts: Option<String>,
+    #[serde(default)]
+    pub via_delegate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

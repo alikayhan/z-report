@@ -137,13 +137,15 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
                 "ref": format!("file:{}", f.path),
                 "path": f.path,
                 "tool": f.tool,
-                "edits": f.count
+                "edits": f.count,
+                "delegated": f.via_delegate
             })).collect::<Vec<_>>(),
             "commands": s.commands.iter().map(|c| json!({
                 "ref": c.id,
                 "command": c.command,
                 "succeeded": c.ok,
-                "kind": c.kind
+                "kind": c.kind,
+                "delegated": c.via_delegate
             })).collect::<Vec<_>>(),
             "commits": s.commits.iter().map(|c| json!({
                 "ref": format!("commit:{}", c.sha),
@@ -179,6 +181,7 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
 6. Keep each achievement brief and legible to someone who wasn't there — a teammate or manager skimming a standup. Title: a short, specific, outcome-first statement (max ~70 chars). Contribution: at most 2-3 plain sentences saying what the developer did and why it mattered — no jargon or filler. Keep each outcome claim to a single scannable bullet line; let the bullets, not the prose, carry the specifics.
 7. Confidence is your honest probability that the developer would recognize this as a real, correctly described accomplishment.
 8. Skip noise: exploratory sessions with no output can be omitted or grouped into one low-confidence "investigation" achievement if the investigation itself was substantial.
+9. Facts marked "delegated": true come from a sub-session the developer directed rather than steered step by step. They still count as the developer's contribution and carry the same evidence weight, but never split them into a separate achievement, and do not describe them as hands-on work.
 
 Return only the structured output."#;
 
@@ -327,6 +330,7 @@ mod tests {
                 ok: true,
                 kind: "test".into(),
                 ts: None,
+                via_delegate: true,
             }],
             commits: vec![CommitFact {
                 sha: "deadbeef".into(),
@@ -348,6 +352,7 @@ mod tests {
         let s = pkg["sessions"][0].clone();
         assert_eq!(s["ref"], "session:abc");
         assert_eq!(s["commands"][0]["ref"], "cmd:abc:0");
+        assert_eq!(s["commands"][0]["delegated"], true);
         assert_eq!(s["commits"][0]["ref"], "commit:deadbeef");
         assert_eq!(s["pull_requests"][0]["ref"], "pr:acme/widgets#5159");
         assert_eq!(

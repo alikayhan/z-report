@@ -2,7 +2,7 @@ use crate::models::*;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_PROMPTS: usize = 25;
 const PROMPT_CHARS: usize = 400;
@@ -22,6 +22,32 @@ pub struct DiscoveredFile {
     pub mtime: u64,
 }
 
+fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn is_transcript(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "jsonl")
+}
+
+/// Transcripts of work the session delegated, written beside the parent.
+fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(transcript.with_extension("").join("subagents")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| is_transcript(p))
+        .collect();
+    out.sort();
+    out
+}
+
 pub fn discover() -> Vec<DiscoveredFile> {
     let mut out = Vec::new();
     let root = transcripts_root();
@@ -34,22 +60,29 @@ pub fn discover() -> Vec<DiscoveredFile> {
         };
         for file in files.flatten() {
             let path = file.path();
-            if path.extension().map_or(true, |e| e != "jsonl") {
+            if !is_transcript(&path) {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
             let Ok(meta) = file.metadata() else { continue };
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let mtime = mtime_secs(&meta);
+            let mut content_hash = format!("{}:{}", meta.len(), mtime);
+            // Delegated work can change without the parent growing, and the suffix
+            // only appears when there is any, so existing hashes stay valid.
+            let sidechains: Vec<std::fs::Metadata> = sidechain_files(&path)
+                .iter()
+                .filter_map(|p| p.metadata().ok())
+                .collect();
+            if !sidechains.is_empty() {
+                let len: u64 = sidechains.iter().map(|m| m.len()).sum();
+                let newest = sidechains.iter().map(mtime_secs).max().unwrap_or(0);
+                content_hash.push_str(&format!(":{}:{len}:{newest}", sidechains.len()));
+            }
             out.push(DiscoveredFile {
                 session_id: stem.to_string(),
-                content_hash: format!("{}:{}", meta.len(), mtime),
+                content_hash,
                 path,
                 mtime,
             });
@@ -67,11 +100,25 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn earlier(a: &str, b: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(a),
+        chrono::DateTime::parse_from_rfc3339(b),
+    ) {
+        (Ok(a), Ok(b)) => a < b,
+        _ => a < b,
+    }
+}
+
+/// Widens the session span. Sidechain files are read after the parent, so
+/// records do not arrive in chronological order.
 fn update_timestamps(facts: &mut SessionFacts, ts: &str) {
-    if facts.first_ts.is_none() {
+    if facts.first_ts.as_deref().is_none_or(|cur| earlier(ts, cur)) {
         facts.first_ts = Some(ts.to_string());
     }
-    facts.last_ts = Some(ts.to_string());
+    if facts.last_ts.as_deref().is_none_or(|cur| earlier(cur, ts)) {
+        facts.last_ts = Some(ts.to_string());
+    }
 }
 
 fn classify_command(cmd: &str) -> &'static str {
@@ -103,21 +150,55 @@ fn classify_command(cmd: &str) -> &'static str {
     }
 }
 
+#[derive(Default)]
+struct Parse {
+    facts: SessionFacts,
+    files: HashMap<String, FileChange>,
+    pending_cmds: HashMap<String, CommandFact>,
+    cmd_order: Vec<String>,
+    pr_urls: HashSet<String>,
+}
+
 /// Parse a full session transcript into normalized facts.
 /// The JSONL schema is internal to Claude Code, so parsing is defensive:
 /// unknown record types are skipped, missing fields degrade to None.
 pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) -> Result<SessionFacts> {
-    let content = std::fs::read_to_string(path)?;
-    let mut facts = SessionFacts {
-        session_id: session_id.to_string(),
-        file_path: path.to_string_lossy().to_string(),
+    let mut p = Parse {
+        facts: SessionFacts {
+            session_id: session_id.to_string(),
+            file_path: path.to_string_lossy().to_string(),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    let mut files: HashMap<String, (String, u32)> = HashMap::new();
-    let mut pending_cmds: HashMap<String, CommandFact> = HashMap::new();
-    let mut cmd_order: Vec<String> = Vec::new();
-    let mut pr_urls = HashSet::new();
+    absorb(&mut p, &std::fs::read_to_string(path)?);
+    for side in sidechain_files(path) {
+        if let Ok(content) = std::fs::read_to_string(&side) {
+            absorb(&mut p, &content);
+        }
+    }
 
+    let Parse {
+        mut facts,
+        files,
+        mut pending_cmds,
+        cmd_order,
+        ..
+    } = p;
+    facts.commands = cmd_order
+        .iter()
+        .filter_map(|id| pending_cmds.remove(id))
+        .collect();
+    facts.files_changed = files.into_values().collect();
+    facts.files_changed.sort_by(|a, b| a.path.cmp(&b.path));
+    if !retain_prompts {
+        facts.prompts.clear();
+        facts.final_response = None;
+    }
+    Ok(facts)
+}
+
+fn absorb(p: &mut Parse, content: &str) {
     for line in content.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -143,47 +224,52 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
             // A PR opened after midnight files the session under the day the work
             // finished, and widens the Git window to catch the commit just before it.
             if let Some(ts) = pr.ts.as_deref() {
-                update_timestamps(&mut facts, ts);
+                update_timestamps(&mut p.facts, ts);
             }
-            if pr_urls.insert(pr.url.clone()) {
-                facts.pr_links.push(pr);
+            if p.pr_urls.insert(pr.url.clone()) {
+                p.facts.pr_links.push(pr);
             }
             continue;
         }
         if rec_type != "user" && rec_type != "assistant" {
             continue;
         }
-        if v["isSidechain"].as_bool() == Some(true) {
-            continue;
-        }
+        let delegated = v["isSidechain"].as_bool() == Some(true);
         if let Some(ts) = v["timestamp"].as_str() {
-            update_timestamps(&mut facts, ts);
+            update_timestamps(&mut p.facts, ts);
         }
-        if let Some(cwd) = v["cwd"].as_str() {
-            facts.cwd = Some(cwd.to_string());
-        }
-        if let Some(branch) = v["gitBranch"].as_str() {
-            if !branch.is_empty() && branch != "HEAD" {
-                facts.git_branch = Some(branch.to_string());
+        // A delegate can run in its own worktree, so its cwd and branch are not
+        // the session's; only the parent defines where the work happened.
+        if !delegated {
+            if let Some(cwd) = v["cwd"].as_str() {
+                p.facts.cwd = Some(cwd.to_string());
             }
-        }
-        if let Some(ver) = v["version"].as_str() {
-            facts.cli_version = Some(ver.to_string());
+            if let Some(branch) = v["gitBranch"].as_str() {
+                if !branch.is_empty() && branch != "HEAD" {
+                    p.facts.git_branch = Some(branch.to_string());
+                }
+            }
+            if let Some(ver) = v["version"].as_str() {
+                p.facts.cli_version = Some(ver.to_string());
+            }
         }
 
         if rec_type == "user" {
             let msg = &v["message"];
             if let Some(text) = msg["content"].as_str() {
-                let is_human = v["origin"]["kind"].as_str().map_or(true, |k| k == "human");
+                // A sidechain user record carries the delegating instruction, not
+                // anything the developer typed.
+                let is_human =
+                    !delegated && v["origin"]["kind"].as_str().map_or(true, |k| k == "human");
                 let is_meta = text.starts_with('<') || text.starts_with("[Request interrupted");
-                if is_human && !is_meta && facts.prompts.len() < MAX_PROMPTS {
-                    facts.prompts.push(truncate(text.trim(), PROMPT_CHARS));
+                if is_human && !is_meta && p.facts.prompts.len() < MAX_PROMPTS {
+                    p.facts.prompts.push(truncate(text.trim(), PROMPT_CHARS));
                 }
             } else if let Some(blocks) = msg["content"].as_array() {
                 for b in blocks {
                     if b["type"].as_str() == Some("tool_result") {
                         if let Some(id) = b["tool_use_id"].as_str() {
-                            if let Some(cmd) = pending_cmds.get_mut(id) {
+                            if let Some(cmd) = p.pending_cmds.get_mut(id) {
                                 cmd.ok = b["is_error"].as_bool() != Some(true);
                             }
                         }
@@ -198,8 +284,8 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
                 match b["type"].as_str() {
                     Some("text") => {
                         if let Some(t) = b["text"].as_str() {
-                            if !t.trim().is_empty() {
-                                facts.final_response = Some(truncate(t.trim(), RESPONSE_CHARS));
+                            if !delegated && !t.trim().is_empty() {
+                                p.facts.final_response = Some(truncate(t.trim(), RESPONSE_CHARS));
                             }
                         }
                     }
@@ -212,22 +298,34 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
                                     (b["id"].as_str(), input["command"].as_str())
                                 {
                                     let fact = CommandFact {
-                                        id: format!("cmd:{}:{}", session_id, cmd_order.len()),
+                                        id: format!(
+                                            "cmd:{}:{}",
+                                            p.facts.session_id,
+                                            p.cmd_order.len()
+                                        ),
                                         command: truncate(cmd, 300),
                                         ok: true,
                                         kind: classify_command(cmd).to_string(),
                                         ts: v["timestamp"].as_str().map(String::from),
+                                        via_delegate: delegated,
                                     };
-                                    cmd_order.push(id.to_string());
-                                    pending_cmds.insert(id.to_string(), fact);
+                                    p.cmd_order.push(id.to_string());
+                                    p.pending_cmds.insert(id.to_string(), fact);
                                 }
                             }
                             "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
                                 if let Some(fp) = input["file_path"].as_str() {
-                                    let entry = files
-                                        .entry(fp.to_string())
-                                        .or_insert((name.to_string(), 0));
-                                    entry.1 += 1;
+                                    let entry =
+                                        p.files.entry(fp.to_string()).or_insert(FileChange {
+                                            path: fp.to_string(),
+                                            tool: name.to_string(),
+                                            count: 0,
+                                            via_delegate: delegated,
+                                        });
+                                    entry.count += 1;
+                                    // Touching a file yourself claims it, however much
+                                    // of the editing a delegate did.
+                                    entry.via_delegate &= delegated;
                                 }
                             }
                             _ => {}
@@ -238,21 +336,6 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
             }
         }
     }
-
-    facts.commands = cmd_order
-        .iter()
-        .filter_map(|id| pending_cmds.remove(id))
-        .collect();
-    facts.files_changed = files
-        .into_iter()
-        .map(|(path, (tool, count))| FileChange { path, tool, count })
-        .collect();
-    facts.files_changed.sort_by(|a, b| a.path.cmp(&b.path));
-    if !retain_prompts {
-        facts.prompts.clear();
-        facts.final_response = None;
-    }
-    Ok(facts)
 }
 
 /// Local calendar day a session belongs to (day of last activity).
@@ -312,6 +395,79 @@ mod tests {
     }
 
     #[test]
+    fn folds_delegated_work_into_the_session() {
+        let dir = std::env::temp_dir().join("zreport-test/delegated");
+        let subagents = dir.join("s2/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let parent = dir.join("s2.jsonl");
+        std::fs::write(
+            &parent,
+            [
+                r#"{"type":"user","message":{"role":"user","content":"Review the diff"},"timestamp":"2026-07-20T10:00:00.000Z","cwd":"/tmp/repo","gitBranch":"main","origin":{"kind":"human"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Edit","input":{"file_path":"/tmp/repo/src/a.rs"}}]},"timestamp":"2026-07-20T10:01:00.000Z"}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Review complete."}]},"timestamp":"2026-07-20T10:30:00.000Z"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            subagents.join("agent-a1.jsonl"),
+            [
+                r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"You are reviewing a diff for efficiency"},"timestamp":"2026-07-20T10:02:00.000Z","cwd":"/tmp/worktree","gitBranch":"detached-copy"}"#,
+                r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"cargo test --all"}}]},"timestamp":"2026-07-20T10:03:00.000Z"}"#,
+                r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":false}]},"timestamp":"2026-07-20T10:04:00.000Z"}"#,
+                r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/tmp/repo/src/a.rs"}},{"type":"tool_use","id":"t4","name":"Write","input":{"file_path":"/tmp/repo/src/b.rs"}}]},"timestamp":"2026-07-20T10:05:00.000Z"}"#,
+                r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"Delegate summary."}]},"timestamp":"2026-07-20T10:06:00.000Z"}"#,
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+
+        let facts = parse_transcript(&parent, "s2", true).unwrap();
+
+        assert_eq!(facts.prompts, vec!["Review the diff"]);
+        assert_eq!(facts.final_response.as_deref(), Some("Review complete."));
+        assert_eq!(facts.cwd.as_deref(), Some("/tmp/repo"));
+        assert_eq!(facts.git_branch.as_deref(), Some("main"));
+        assert_eq!(facts.commands.len(), 1);
+        assert_eq!(facts.commands[0].id, "cmd:s2:0");
+        assert!(facts.commands[0].ok && facts.commands[0].via_delegate);
+        assert_eq!(facts.commands[0].kind, "test");
+        let changed: Vec<(&str, bool)> = facts
+            .files_changed
+            .iter()
+            .map(|f| (f.path.as_str(), f.via_delegate))
+            .collect();
+        assert_eq!(
+            changed,
+            vec![("/tmp/repo/src/a.rs", false), ("/tmp/repo/src/b.rs", true)]
+        );
+        assert_eq!(facts.files_changed[0].count, 2);
+        assert_eq!(facts.first_ts.as_deref(), Some("2026-07-20T10:00:00.000Z"));
+        assert_eq!(facts.last_ts.as_deref(), Some("2026-07-20T10:30:00.000Z"));
+    }
+
+    #[test]
+    fn delegated_work_alone_is_substantial() {
+        let dir = std::env::temp_dir().join("zreport-test/delegated-only");
+        let subagents = dir.join("s3/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let parent = dir.join("s3.jsonl");
+        std::fs::write(&parent, "").unwrap();
+        std::fs::write(
+            subagents.join("agent-a1.jsonl"),
+            r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/tmp/repo/src/c.rs"}}]},"timestamp":"2026-07-20T10:05:00.000Z"}"#,
+        )
+        .unwrap();
+
+        let facts = parse_transcript(&parent, "s3", true).unwrap();
+
+        assert!(facts.has_substance());
+        assert!(facts.prompts.is_empty());
+        assert_eq!(facts.files_changed.len(), 1);
+    }
+
+    #[test]
     fn parses_and_deduplicates_pr_links() {
         let dir = std::env::temp_dir().join("zreport-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -355,3 +511,4 @@ mod tests {
         );
     }
 }
+
