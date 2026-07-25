@@ -26,6 +26,8 @@ pub struct SessionFacts {
     pub commits: Vec<CommitFact>,
     #[serde(default)]
     pub pr_links: Vec<PrLink>,
+    #[serde(default)]
+    pub external_actions: Vec<ExternalAction>,
 }
 
 impl SessionFacts {
@@ -35,6 +37,7 @@ impl SessionFacts {
             || !self.commands.is_empty()
             || !self.commits.is_empty()
             || !self.pr_links.is_empty()
+            || !self.external_actions.is_empty()
     }
 }
 
@@ -53,6 +56,19 @@ pub struct CommandFact {
     pub command: String,
     pub ok: bool,
     pub kind: String,
+    pub ts: Option<String>,
+    #[serde(default)]
+    pub via_delegate: bool,
+}
+
+/// A call to an external service that changed something outside the repo.
+/// Whether the call succeeded is knowable; its effect is not verifiable offline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalAction {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+    pub ok: bool,
     pub ts: Option<String>,
     #[serde(default)]
     pub via_delegate: bool,
