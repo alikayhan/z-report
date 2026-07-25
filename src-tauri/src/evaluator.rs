@@ -147,6 +147,14 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
                 "kind": c.kind,
                 "delegated": c.via_delegate
             })).collect::<Vec<_>>(),
+            "external_actions": s.external_actions.iter().map(|a| json!({
+                "ref": a.id,
+                "server": a.server,
+                "tool": a.tool,
+                "succeeded": a.ok,
+                "delegated": a.via_delegate,
+                "performed_at": a.ts
+            })).collect::<Vec<_>>(),
             "commits": s.commits.iter().map(|c| json!({
                 "ref": format!("commit:{}", c.sha),
                 "sha": c.sha,
@@ -173,15 +181,16 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
 
 1. Celebrate outcomes, not activity. "Fixed flaky auth test that blocked CI" is an achievement; "ran 14 commands" is not.
 2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
-3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "commit:…", "pr:…"). Never invent refs.
+3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "action:…", "commit:…", "pr:…"). Never invent refs.
 4. Assign each claim the highest evidence level the cited refs support:
    1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit or has a recorded PR link alongside a file change.
-   Never claim level 3 without a succeeded test/build/check ref; never claim level 4 without a commit ref or a PR ref from a session with a file change. A PR ref proves the change was proposed, not merged.
+   Never claim level 3 without a succeeded test/build/check ref; never claim level 4 without a commit ref or a PR ref from a session with a file change. A PR ref proves the change was proposed, not merged. An "action:" ref never supports more than level 2.
 5. State uncertainties honestly (e.g. "tests were not run", "change not committed"). Do not speculate about production impact.
 6. Keep each achievement brief and legible to someone who wasn't there — a teammate or manager skimming a standup. Title: a short, specific, outcome-first statement (max ~70 chars). Contribution: at most 2-3 plain sentences saying what the developer did and why it mattered — no jargon or filler. Keep each outcome claim to a single scannable bullet line; let the bullets, not the prose, carry the specifics.
 7. Confidence is your honest probability that the developer would recognize this as a real, correctly described accomplishment.
 8. Skip noise: exploratory sessions with no output can be omitted or grouped into one low-confidence "investigation" achievement if the investigation itself was substantial.
 9. Facts marked "delegated": true come from a sub-session the developer directed rather than steered step by step. They still count as the developer's contribution and carry the same evidence weight, but never split them into a separate achievement, and do not describe them as hands-on work.
+10. "external_actions" are calls to services outside the repository — an issue commented on, a document updated. Only the call is recorded; nothing local proves what it did. Describe them as performed ("posted the migration notes to the tracker"), never as confirmed impact ("unblocked the team"), and do not build an achievement out of external actions alone unless the action itself was the point of the work.
 
 Return only the structured output."#;
 
@@ -346,6 +355,14 @@ mod tests {
                 repository: "acme/widgets".into(),
                 ts: Some("2026-07-20T10:05:00+02:00".into()),
             }],
+            external_actions: vec![ExternalAction {
+                id: "action:abc:0".into(),
+                server: "claude_ai_Atlassian".into(),
+                tool: "addCommentToJiraIssue".into(),
+                ok: true,
+                ts: Some("2026-07-20T10:06:00+02:00".into()),
+                via_delegate: false,
+            }],
             ..Default::default()
         };
         let pkg = build_evidence_package("2026-07-20", &[facts]);
@@ -353,6 +370,9 @@ mod tests {
         assert_eq!(s["ref"], "session:abc");
         assert_eq!(s["commands"][0]["ref"], "cmd:abc:0");
         assert_eq!(s["commands"][0]["delegated"], true);
+        assert_eq!(s["external_actions"][0]["ref"], "action:abc:0");
+        assert_eq!(s["external_actions"][0]["tool"], "addCommentToJiraIssue");
+        assert_eq!(s["external_actions"][0]["succeeded"], true);
         assert_eq!(s["commits"][0]["ref"], "commit:deadbeef");
         assert_eq!(s["pull_requests"][0]["ref"], "pr:acme/widgets#5159");
         assert_eq!(
