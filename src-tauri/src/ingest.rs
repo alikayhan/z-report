@@ -30,6 +30,10 @@ fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
+fn is_transcript(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "jsonl")
+}
+
 /// Transcripts of work the session delegated, written beside the parent.
 fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(transcript.with_extension("").join("subagents")) else {
@@ -38,7 +42,7 @@ fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .filter(|p| is_transcript(p))
         .collect();
     out.sort();
     out
@@ -56,7 +60,7 @@ pub fn discover() -> Vec<DiscoveredFile> {
         };
         for file in files.flatten() {
             let path = file.path();
-            if path.extension().map_or(true, |e| e != "jsonl") {
+            if !is_transcript(&path) {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -167,10 +171,10 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
         },
         ..Default::default()
     };
-    absorb(&mut p, &std::fs::read_to_string(path)?, session_id);
+    absorb(&mut p, &std::fs::read_to_string(path)?);
     for side in sidechain_files(path) {
         if let Ok(content) = std::fs::read_to_string(&side) {
-            absorb(&mut p, &content, session_id);
+            absorb(&mut p, &content);
         }
     }
 
@@ -194,7 +198,7 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
     Ok(facts)
 }
 
-fn absorb(p: &mut Parse, content: &str, session_id: &str) {
+fn absorb(p: &mut Parse, content: &str) {
     for line in content.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -294,7 +298,11 @@ fn absorb(p: &mut Parse, content: &str, session_id: &str) {
                                     (b["id"].as_str(), input["command"].as_str())
                                 {
                                     let fact = CommandFact {
-                                        id: format!("cmd:{}:{}", session_id, p.cmd_order.len()),
+                                        id: format!(
+                                            "cmd:{}:{}",
+                                            p.facts.session_id,
+                                            p.cmd_order.len()
+                                        ),
                                         command: truncate(cmd, 300),
                                         ok: true,
                                         kind: classify_command(cmd).to_string(),
@@ -315,6 +323,8 @@ fn absorb(p: &mut Parse, content: &str, session_id: &str) {
                                             via_delegate: delegated,
                                         });
                                     entry.count += 1;
+                                    // Touching a file yourself claims it, however much
+                                    // of the editing a delegate did.
                                     entry.via_delegate &= delegated;
                                 }
                             }
