@@ -150,12 +150,40 @@ fn classify_command(cmd: &str) -> &'static str {
     }
 }
 
+/// Verbs that name an outward change. Matched as whole words against the tool
+/// name, so plurals and past tenses ("comments", "updated") stay reads.
+const MUTATING_VERBS: &[&str] = &[
+    "add", "append", "archive", "assign", "close", "copy", "create", "delete", "edit", "insert",
+    "merge", "move", "post", "publish", "remove", "rename", "reply", "schedule", "send", "set",
+    "submit", "update", "upload", "write",
+];
+
+/// Most MCP calls read: searches, fetches, screenshots. Only the ones that write
+/// are evidence — the rest are browsing, and reporting them would be activity.
+fn mutates_external_state(tool: &str) -> bool {
+    let mut words = String::with_capacity(tool.len() + 8);
+    for c in tool.chars() {
+        if c == '_' || c == '-' {
+            words.push(' ');
+        } else {
+            if c.is_uppercase() && !words.is_empty() && !words.ends_with(' ') {
+                words.push(' ');
+            }
+            words.extend(c.to_lowercase());
+        }
+    }
+    words
+        .split_whitespace()
+        .any(|w| MUTATING_VERBS.contains(&w))
+}
+
 #[derive(Default)]
 struct Parse {
     facts: SessionFacts,
     files: HashMap<String, FileChange>,
-    pending_cmds: HashMap<String, CommandFact>,
-    cmd_order: Vec<String>,
+    commands: Vec<(String, CommandFact)>,
+    actions: Vec<(String, ExternalAction)>,
+    results: HashMap<String, bool>,
     pr_urls: HashSet<String>,
 }
 
@@ -181,13 +209,26 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
     let Parse {
         mut facts,
         files,
-        mut pending_cmds,
-        cmd_order,
+        commands,
+        actions,
+        results,
         ..
     } = p;
-    facts.commands = cmd_order
-        .iter()
-        .filter_map(|id| pending_cmds.remove(id))
+    // A call with no recorded result was never reported as failing.
+    let succeeded = |id: &str| results.get(id).copied().unwrap_or(true);
+    facts.commands = commands
+        .into_iter()
+        .map(|(id, mut c)| {
+            c.ok = succeeded(&id);
+            c
+        })
+        .collect();
+    facts.external_actions = actions
+        .into_iter()
+        .map(|(id, mut a)| {
+            a.ok = succeeded(&id);
+            a
+        })
         .collect();
     facts.files_changed = files.into_values().collect();
     facts.files_changed.sort_by(|a, b| a.path.cmp(&b.path));
@@ -269,9 +310,8 @@ fn absorb(p: &mut Parse, content: &str) {
                 for b in blocks {
                     if b["type"].as_str() == Some("tool_result") {
                         if let Some(id) = b["tool_use_id"].as_str() {
-                            if let Some(cmd) = p.pending_cmds.get_mut(id) {
-                                cmd.ok = b["is_error"].as_bool() != Some(true);
-                            }
+                            p.results
+                                .insert(id.to_string(), b["is_error"].as_bool() != Some(true));
                         }
                     }
                 }
@@ -301,7 +341,7 @@ fn absorb(p: &mut Parse, content: &str) {
                                         id: format!(
                                             "cmd:{}:{}",
                                             p.facts.session_id,
-                                            p.cmd_order.len()
+                                            p.commands.len()
                                         ),
                                         command: truncate(cmd, 300),
                                         ok: true,
@@ -309,8 +349,7 @@ fn absorb(p: &mut Parse, content: &str) {
                                         ts: v["timestamp"].as_str().map(String::from),
                                         via_delegate: delegated,
                                     };
-                                    p.cmd_order.push(id.to_string());
-                                    p.pending_cmds.insert(id.to_string(), fact);
+                                    p.commands.push((id.to_string(), fact));
                                 }
                             }
                             "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
@@ -328,7 +367,31 @@ fn absorb(p: &mut Parse, content: &str) {
                                     entry.via_delegate &= delegated;
                                 }
                             }
-                            _ => {}
+                            _ => {
+                                let Some((server, tool)) = name
+                                    .strip_prefix("mcp__")
+                                    .and_then(|rest| rest.split_once("__"))
+                                else {
+                                    continue;
+                                };
+                                let Some(id) = b["id"].as_str() else { continue };
+                                if !mutates_external_state(tool) {
+                                    continue;
+                                }
+                                let action = ExternalAction {
+                                    id: format!(
+                                        "action:{}:{}",
+                                        p.facts.session_id,
+                                        p.actions.len()
+                                    ),
+                                    server: server.to_string(),
+                                    tool: tool.to_string(),
+                                    ok: true,
+                                    ts: v["timestamp"].as_str().map(String::from),
+                                    via_delegate: delegated,
+                                };
+                                p.actions.push((id.to_string(), action));
+                            }
                         }
                     }
                     _ => {}
@@ -468,6 +531,85 @@ mod tests {
     }
 
     #[test]
+    fn classifies_mutating_mcp_tools() {
+        for tool in [
+            "addCommentToJiraIssue",
+            "createJiraIssue",
+            "editJiraIssue",
+            "notion-update-page",
+            "notion-move-pages",
+            "slack_send_message",
+            "upload_assets",
+        ] {
+            assert!(mutates_external_state(tool), "{tool} should be a mutation");
+        }
+        for tool in [
+            "searchJiraIssuesUsingJql",
+            "getVisibleJiraProjects",
+            "getTransitionsForJiraIssue",
+            "getConfluenceCommentChildren",
+            "notion-fetch",
+            "notion-get-comments",
+            "preview_eval",
+            "preview_screenshot",
+            "get_guidelines",
+            "download_assets",
+            "slack_read_thread",
+        ] {
+            assert!(!mutates_external_state(tool), "{tool} should be a read");
+        }
+    }
+
+    #[test]
+    fn records_only_external_actions_that_change_something() {
+        let dir = std::env::temp_dir().join("zreport-test/external-actions");
+        let subagents = dir.join("s4/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let parent = dir.join("s4.jsonl");
+        let mcp = |id: &str, name: &str, ts: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{{}}}}]}},"timestamp":"{ts}"}}"#
+            )
+        };
+        std::fs::write(
+            &parent,
+            [
+                mcp("t1", "mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql", "2026-07-20T10:00:00.000Z"),
+                mcp("t2", "mcp__claude_ai_Atlassian__addCommentToJiraIssue", "2026-07-20T10:01:00.000Z"),
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":false}]},"timestamp":"2026-07-20T10:02:00.000Z"}"#.to_string(),
+                mcp("t3", "mcp__Claude_Preview__preview_screenshot", "2026-07-20T10:03:00.000Z"),
+                mcp("t4", "mcp__claude_ai_Notion__notion-update-page", "2026-07-20T10:04:00.000Z"),
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","is_error":true}]},"timestamp":"2026-07-20T10:05:00.000Z"}"#.to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            subagents.join("agent-a1.jsonl"),
+            r#"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t5","name":"mcp__claude_ai_Atlassian__editJiraIssue","input":{}}]},"timestamp":"2026-07-20T10:06:00.000Z"}"#,
+        )
+        .unwrap();
+
+        let facts = parse_transcript(&parent, "s4", true).unwrap();
+
+        let actions: Vec<(&str, &str, bool, bool)> = facts
+            .external_actions
+            .iter()
+            .map(|a| (a.id.as_str(), a.tool.as_str(), a.ok, a.via_delegate))
+            .collect();
+        assert_eq!(
+            actions,
+            vec![
+                ("action:s4:0", "addCommentToJiraIssue", true, false),
+                ("action:s4:1", "notion-update-page", false, false),
+                ("action:s4:2", "editJiraIssue", true, true),
+            ]
+        );
+        assert_eq!(facts.external_actions[0].server, "claude_ai_Atlassian");
+        assert!(facts.has_substance());
+    }
+
+    #[test]
     fn parses_and_deduplicates_pr_links() {
         let dir = std::env::temp_dir().join("zreport-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -511,4 +653,3 @@ mod tests {
         );
     }
 }
-
