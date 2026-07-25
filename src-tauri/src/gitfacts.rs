@@ -117,7 +117,7 @@ pub fn correlate(facts: &mut SessionFacts) {
 
 /// Highest evidence level a set of refs deterministically supports.
 /// Refs: "commit:<sha>", "pr:<owner>/<repo>#<n>", "cmd:<session>:<n>",
-/// "file:<path>", "session:<id>".
+/// "action:<session>:<n>", "file:<path>", "session:<id>".
 pub fn verify_outcome(
     outcome: &mut Outcome,
     sessions: &[&SessionFacts],
@@ -156,6 +156,17 @@ pub fn verify_outcome(
             match found {
                 Some(c) if c.ok && matches!(c.kind.as_str(), "test" | "build" | "check") => 3,
                 Some(c) if c.ok => 1,
+                _ => 0,
+            }
+        } else if r.starts_with("action:") {
+            // The call is recorded, its effect on the outside world is not, so an
+            // external action never rises past "a change was produced".
+            let found = sessions
+                .iter()
+                .flat_map(|s| &s.external_actions)
+                .find(|a| &a.id == r);
+            match found {
+                Some(a) if a.ok => 2,
                 _ => 0,
             }
         } else if let Some(path) = r.strip_prefix("file:") {
@@ -310,6 +321,48 @@ mod tests {
             assert!(!o.verified);
             assert_eq!(o.evidence_level, 1);
             assert_eq!(u.len(), 1);
+        }
+    }
+
+    #[test]
+    fn external_action_supports_change_produced_at_most() {
+        let mut s = session_with_cmd(true, "test");
+        s.external_actions = vec![
+            ExternalAction {
+                id: "action:s1:0".into(),
+                server: "claude_ai_Atlassian".into(),
+                tool: "addCommentToJiraIssue".into(),
+                ok: true,
+                ts: None,
+                via_delegate: false,
+            },
+            ExternalAction {
+                id: "action:s1:1".into(),
+                server: "claude_ai_Notion".into(),
+                tool: "notion-update-page".into(),
+                ok: false,
+                ts: None,
+                via_delegate: false,
+            },
+        ];
+        for (evidence_ref, claimed, expected) in [
+            ("action:s1:0", 2, 2),
+            ("action:s1:0", 4, 2),
+            ("action:s1:1", 2, 1),
+            ("action:s1:9", 2, 1),
+        ] {
+            let mut o = Outcome {
+                claim: "Posted the migration notes".into(),
+                evidence_level: claimed,
+                evidence_refs: vec![evidence_ref.into()],
+                verified: false,
+            };
+            let mut u = Vec::new();
+
+            verify_outcome(&mut o, &[&s], &mut u);
+
+            assert_eq!(o.evidence_level, expected, "{evidence_ref} at {claimed}");
+            assert_eq!(o.verified, claimed == expected);
         }
     }
 
