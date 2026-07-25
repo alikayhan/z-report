@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { api, inTauri, levelLabel, Candidate, JournalEntry, Overview, Settings } from "./api";
+import { api, inTauri, levelLabel, Candidate, JournalEntry, Overview, PrLink, Settings } from "./api";
 import "./styles.css";
 
 type View = "review" | "journal" | "export" | "settings";
@@ -33,6 +33,10 @@ function esc(s: string): string {
   const d = document.createElement("span");
   d.textContent = s;
   return d.innerHTML;
+}
+
+function escAttr(s: string): string {
+  return esc(s).replace(/"/g, "&quot;");
 }
 
 function repoName(repo: string | null): string {
@@ -98,6 +102,18 @@ function outcomeRow(o: { claim: string; evidence_level: number; verified: boolea
   </div>`;
 }
 
+// Canonical form is enforced once at ingest; this guards only the href sink.
+function prLinksRow(links: PrLink[]): string {
+  const html = links
+    .filter((pr) => pr.url.startsWith("https://"))
+    .map(
+      (pr) =>
+        `<a class="pr-link" href="${escAttr(pr.url)}" target="_blank" rel="noopener noreferrer">PR ${esc(pr.repository)}#${esc(String(pr.number))}</a>`,
+    )
+    .join("");
+  return html ? `<div class="pr-links">${html}</div>` : "";
+}
+
 function candidateCard(c: Candidate): string {
   if (state.editingId === c.id) return candidateEditCard(c);
   const selected = state.selection.has(c.id);
@@ -115,6 +131,7 @@ function candidateCard(c: Candidate): string {
     <hr class="receipt-rule">
     ${outcomes}
     ${uncertainties}
+    ${prLinksRow(c.pr_links)}
     <hr class="receipt-rule">
     <div class="receipt-total">
       <span>${c.session_ids.length} session${c.session_ids.length === 1 ? "" : "s"}</span>
@@ -217,6 +234,7 @@ function journalCard(e: JournalEntry): string {
     <h2 class="receipt-title">${esc(e.title)}</h2>
     <p class="receipt-body">${esc(e.contribution)}</p>
     ${outcomes ? `<hr class="receipt-rule">${outcomes}` : ""}
+    ${prLinksRow(e.pr_links)}
     <hr class="receipt-rule">
     <div class="receipt-total">
       <span>approved ${esc(e.approved_at.slice(0, 10))}</span>

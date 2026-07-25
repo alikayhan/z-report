@@ -17,12 +17,7 @@ fn main() -> anyhow::Result<()> {
         .pending_sessions(&day, &day)?
         .into_iter()
         .map(|(_, f)| f)
-        .filter(|f| {
-            !f.prompts.is_empty()
-                || !f.files_changed.is_empty()
-                || !f.commands.is_empty()
-                || !f.commits.is_empty()
-        })
+        .filter(SessionFacts::has_substance)
         .collect();
     eprintln!("evaluating {} substantial session(s) for {day}", sessions.len());
     if sessions.is_empty() {

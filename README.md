@@ -28,7 +28,8 @@ Daily flow:
 
 1. **Work normally.** Every 30 minutes (configurable) the worker scans local Claude
    Code transcripts, extracts facts (prompts, files changed, commands run, exit
-   status), and correlates them with local Git state (repo, branch, your commits).
+   status, pull requests opened), and correlates them with local Git state (repo,
+   branch, your commits).
 2. **Z-read.** At your chosen time a notification announces the day's candidates
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
@@ -46,12 +47,20 @@ downgrades anything the evaluator overstated:
 1. **Work observed** — investigation or implementation appears in a session
 2. **Change produced** — a concrete local change exists
 3. **Locally verified** — a relevant test/build/check passed
-4. **Committed** — the change exists in a local commit
+4. **Committed** — the change exists in a local commit, or the session recorded a
+   pull request alongside a file change
 5. **Impact confirmed** — you manually confirmed a real-world outcome
 
 Verification is deterministic Rust code, not the model: commit refs are checked with
 `git cat-file`, command refs against recorded exit status, file refs against the
-session's change list. Unsupported claims are downgraded and labeled.
+session's change list, and pull request refs against links recorded in the session
+itself. Unsupported claims are downgraded and labeled.
+
+A recorded pull request proves the change was proposed, not that it merged — merge
+state is not knowable offline, so it never reaches level 5 on its own. It does keep an
+achievement at level 4 after a squash merge deletes the local commit. Links are carried
+through to the journal and Markdown export, and only canonical `github.com` pull request
+URLs are kept.
 
 ## Privacy and network boundary
 
@@ -60,7 +69,7 @@ session's change list. Unsupported claims are downgraded and labeled.
 - Z Report has **no backend, no analytics, and no telemetry**.
 - The one thing that leaves your Mac: each evaluation runs `claude -p` on **your own
   Claude Code account**, sending the prepared evidence package (session excerpts,
-  file paths, command results, commit metadata) to Anthropic — the same boundary as
+  file paths, command results, commit and pull request metadata) to Anthropic — the same boundary as
   using Claude Code itself. This is disclosed in Settings.
 - The evaluator is sandboxed: fresh ephemeral run, read-only tool allowlist
   (`Read,Grep,Glob`), working directory containing only the evidence package,
@@ -98,10 +107,10 @@ Verified against Claude Code 2.1.215:
   --setting-sources ""` provide read-only, ephemeral isolation; `--max-budget-usd`
   adds a fixed per-run safety cap when the cost limit is enabled. Permission denials
   are visible in the result.
-- Transcript JSONL records are typed (`user`, `assistant`, `system`, attachments,
-  snapshots); parsing is defensive because the schema is internal to Claude Code and
-  undocumented. Records carry `cwd`, `gitBranch`, `version`, and timestamps used for
-  Git correlation.
+- Transcript JSONL records are typed (`user`, `assistant`, `system`, `pr-link`,
+  attachments, snapshots); parsing is defensive because the schema is internal to
+  Claude Code and undocumented. Records carry `cwd`, `gitBranch`, `version`, and
+  timestamps used for Git correlation.
 
 ## Non-goals (MVP)
 
