@@ -29,7 +29,7 @@ Daily flow:
 1. **Work normally.** Every 30 minutes (configurable) the worker scans local Claude
    Code transcripts, extracts facts (prompts, files changed, commands run, exit
    status, pull requests opened), and correlates them with local Git state (repo,
-   branch, your commits).
+   branch, your commits). Work you delegated to a sub-session counts too.
 2. **Z-read.** At your chosen time a notification announces the day's candidates
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
@@ -62,6 +62,14 @@ achievement at level 4 after a squash merge deletes the local commit. Links are 
 through to the journal and Markdown export, and only canonical `github.com` pull request
 URLs are kept.
 
+A session that delegates work to a sub-session is credited with it: the edits and
+commands from the delegated run fold into the parent session and carry the same evidence
+weight, since you directed them. They are marked as delegated so the evaluator describes
+them accurately rather than as hands-on work, and so a delegated session is no longer
+mistaken for an empty one. Only the parent's prompts count as things you said, and only
+the parent's working directory defines the repository — a delegate may run in its own
+worktree.
+
 ## Privacy and network boundary
 
 - All product data (evidence, candidates, journal, settings) lives in
@@ -69,8 +77,9 @@ URLs are kept.
 - Z Report has **no backend, no analytics, and no telemetry**.
 - The one thing that leaves your Mac: each evaluation runs `claude -p` on **your own
   Claude Code account**, sending the prepared evidence package (session excerpts,
-  file paths, command results, commit and pull request metadata) to Anthropic — the same boundary as
-  using Claude Code itself. This is disclosed in Settings.
+  file paths, command results including those from delegated sub-sessions, commit and
+  pull request metadata) to Anthropic — the same boundary as using Claude Code itself.
+  This is disclosed in Settings.
 - The evaluator is sandboxed: fresh ephemeral run, read-only tool allowlist
   (`Read,Grep,Glob`), working directory containing only the evidence package,
   no session persistence, no user settings, and an optional per-run safety cap.
@@ -111,6 +120,10 @@ Verified against Claude Code 2.1.215:
   attachments, snapshots); parsing is defensive because the schema is internal to
   Claude Code and undocumented. Records carry `cwd`, `gitBranch`, `version`, and
   timestamps used for Git correlation.
+- Delegated runs live in sibling files (`<session-id>/subagents/agent-*.jsonl`) whose
+  records are flagged `isSidechain`. They are read alongside the parent transcript and
+  folded into the same session, and they contribute to the change-detection hash so
+  delegated work alone re-triggers an evaluation.
 
 ## Non-goals (MVP)
 
