@@ -35,6 +35,10 @@ function esc(s: string): string {
   return d.innerHTML;
 }
 
+function escAttr(s: string): string {
+  return esc(s).replace(/"/g, "&quot;");
+}
+
 function repoName(repo: string | null): string {
   if (!repo) return "no repo";
   return repo.split("/").filter(Boolean).pop() ?? repo;
@@ -98,18 +102,16 @@ function outcomeRow(o: { claim: string; evidence_level: number; verified: boolea
   </div>`;
 }
 
-function githubPrUrl(pr: PrLink): string | null {
-  const parts = pr.repository.split("/");
-  if (
-    parts.length !== 2 ||
-    parts.some((part) => !/^[a-zA-Z0-9_.-]+$/.test(part)) ||
-    !Number.isSafeInteger(pr.number) ||
-    pr.number <= 0
-  ) {
-    return null;
-  }
-  const expected = `https://github.com/${parts[0]}/${parts[1]}/pull/${pr.number}`;
-  return pr.url === expected ? expected : null;
+// Canonical form is enforced once at ingest; this guards only the href sink.
+function prLinksRow(links: PrLink[]): string {
+  const html = links
+    .filter((pr) => pr.url.startsWith("https://"))
+    .map(
+      (pr) =>
+        `<a class="pr-link" href="${escAttr(pr.url)}" target="_blank" rel="noopener noreferrer">PR ${esc(pr.repository)}#${esc(String(pr.number))}</a>`,
+    )
+    .join("");
+  return html ? `<div class="pr-links">${html}</div>` : "";
 }
 
 function candidateCard(c: Candidate): string {
@@ -119,14 +121,6 @@ function candidateCard(c: Candidate): string {
   const uncertainties = c.uncertainties.length
     ? `<div class="uncertainties">${c.uncertainties.map((u) => esc(u)).join("<br>")}</div>`
     : "";
-  const prLinks = c.pr_links
-    .map((pr) => {
-      const href = githubPrUrl(pr);
-      return href
-        ? `<a class="pr-link" href="${href}" target="_blank" rel="noopener noreferrer">PR ${esc(pr.repository)}#${pr.number}</a>`
-        : "";
-    })
-    .join("");
   return `<article class="receipt ${selected ? "selected" : ""}" data-id="${c.id}">
     <div class="receipt-meta">
       <span>${esc(repoName(c.repo))}</span>
@@ -137,7 +131,7 @@ function candidateCard(c: Candidate): string {
     <hr class="receipt-rule">
     ${outcomes}
     ${uncertainties}
-    ${prLinks ? `<div class="pr-links">${prLinks}</div>` : ""}
+    ${prLinksRow(c.pr_links)}
     <hr class="receipt-rule">
     <div class="receipt-total">
       <span>${c.session_ids.length} session${c.session_ids.length === 1 ? "" : "s"}</span>
@@ -240,6 +234,7 @@ function journalCard(e: JournalEntry): string {
     <h2 class="receipt-title">${esc(e.title)}</h2>
     <p class="receipt-body">${esc(e.contribution)}</p>
     ${outcomes ? `<hr class="receipt-rule">${outcomes}` : ""}
+    ${prLinksRow(e.pr_links)}
     <hr class="receipt-rule">
     <div class="receipt-total">
       <span>approved ${esc(e.approved_at.slice(0, 10))}</span>
