@@ -1,7 +1,7 @@
 use crate::models::*;
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 const MAX_PROMPTS: usize = 25;
@@ -67,6 +67,13 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn update_timestamps(facts: &mut SessionFacts, ts: &str) {
+    if facts.first_ts.is_none() {
+        facts.first_ts = Some(ts.to_string());
+    }
+    facts.last_ts = Some(ts.to_string());
+}
+
 fn classify_command(cmd: &str) -> &'static str {
     let c = cmd.to_lowercase();
     let test_markers = [
@@ -109,12 +116,38 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
     let mut files: HashMap<String, (String, u32)> = HashMap::new();
     let mut pending_cmds: HashMap<String, CommandFact> = HashMap::new();
     let mut cmd_order: Vec<String> = Vec::new();
+    let mut pr_urls = HashSet::new();
 
     for line in content.lines() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let rec_type = v["type"].as_str().unwrap_or("");
+        if rec_type == "pr-link" {
+            let Some(number) = v["prNumber"].as_u64() else {
+                continue;
+            };
+            let (Some(url), Some(repository)) = (v["prUrl"].as_str(), v["prRepository"].as_str())
+            else {
+                continue;
+            };
+            let pr = PrLink {
+                number,
+                url: url.to_string(),
+                repository: repository.to_string(),
+                ts: v["timestamp"].as_str().map(String::from),
+            };
+            if !pr.has_canonical_url() {
+                continue;
+            }
+            if let Some(ts) = pr.ts.as_deref() {
+                update_timestamps(&mut facts, ts);
+            }
+            if pr_urls.insert(pr.url.clone()) {
+                facts.pr_links.push(pr);
+            }
+            continue;
+        }
         if rec_type != "user" && rec_type != "assistant" {
             continue;
         }
@@ -122,10 +155,7 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
             continue;
         }
         if let Some(ts) = v["timestamp"].as_str() {
-            if facts.first_ts.is_none() {
-                facts.first_ts = Some(ts.to_string());
-            }
-            facts.last_ts = Some(ts.to_string());
+            update_timestamps(&mut facts, ts);
         }
         if let Some(cwd) = v["cwd"].as_str() {
             facts.cwd = Some(cwd.to_string());
@@ -277,5 +307,49 @@ mod tests {
             let dt = chrono::DateTime::parse_from_rfc3339("2026-07-20T10:04:00.000Z").unwrap();
             dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()
         });
+    }
+
+    #[test]
+    fn parses_and_deduplicates_pr_links() {
+        let dir = std::env::temp_dir().join("zreport-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("pr-links.jsonl");
+        let lines = [
+            r#"{"type":"user","message":{"role":"user","content":"Ship the fix"},"timestamp":"2026-07-20T10:00:00.000Z"}"#,
+            r#"{"type":"pr-link","sessionId":"s1","prNumber":5159,"prUrl":"https://github.com/acme/widgets/pull/5159","prRepository":"acme/widgets","timestamp":"2026-07-20T10:04:00.000Z"}"#,
+            r#"{"type":"pr-link","sessionId":"s1","prNumber":5159,"prUrl":"https://github.com/acme/widgets/pull/5159","prRepository":"acme/widgets","timestamp":"2026-07-20T10:05:00.000Z"}"#,
+            r#"{"type":"pr-link","sessionId":"s1","prNumber":9999,"prUrl":"javascript:alert(1)","prRepository":"acme/widgets","timestamp":"2026-07-20T10:06:00.000Z"}"#,
+            r#"{"type":"pr-link","sessionId":"s1","prNumber":9998,"prUrl":"https://github.com/acme/widgets/pull/9999","prRepository":"acme/widgets","timestamp":"2026-07-20T10:07:00.000Z"}"#,
+            r#"{"type":"pr-link","sessionId":"s1","prNumber":5160,"prUrl":"https://github.com/acme/widgets/pull/5160","prRepository":"acme/widgets","timestamp":"2026-07-21T00:06:00.000Z"}"#,
+        ];
+        std::fs::write(&p, lines.join("\n")).unwrap();
+
+        let facts = parse_transcript(&p, "s1", true).unwrap();
+
+        assert_eq!(facts.pr_links.len(), 2);
+        assert_eq!(
+            facts.pr_links[0],
+            PrLink {
+                number: 5159,
+                url: "https://github.com/acme/widgets/pull/5159".into(),
+                repository: "acme/widgets".into(),
+                ts: Some("2026-07-20T10:04:00.000Z".into()),
+            }
+        );
+        assert_eq!(facts.pr_links[1].number, 5160);
+        assert_eq!(
+            facts.last_ts.as_deref(),
+            Some("2026-07-21T00:06:00.000Z")
+        );
+        assert_eq!(
+            session_day(&facts),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-07-21T00:06:00.000Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
+            )
+        );
     }
 }

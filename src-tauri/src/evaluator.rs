@@ -153,6 +153,13 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
                 "files": c.files,
                 "insertions": c.insertions,
                 "deletions": c.deletions
+            })).collect::<Vec<_>>(),
+            "pull_requests": s.pr_links.iter().map(|pr| json!({
+                "ref": pr.evidence_ref(),
+                "number": pr.number,
+                "url": pr.url,
+                "repository": pr.repository,
+                "recorded_at": pr.ts
             })).collect::<Vec<_>>()
         })).collect::<Vec<_>>()
     })
@@ -164,10 +171,10 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
 
 1. Celebrate outcomes, not activity. "Fixed flaky auth test that blocked CI" is an achievement; "ran 14 commands" is not.
 2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
-3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "commit:…"). Never invent refs.
+3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "commit:…", "pr:…"). Never invent refs.
 4. Assign each claim the highest evidence level the cited refs support:
-   1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit.
-   Never claim level 3 without a succeeded test/build/check ref; never claim level 4 without a commit ref.
+   1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit or has a recorded PR link alongside a file change.
+   Never claim level 3 without a succeeded test/build/check ref; never claim level 4 without a commit ref or a PR ref from a session with a file change. A PR ref proves the change was proposed, not merged.
 5. State uncertainties honestly (e.g. "tests were not run", "change not committed"). Do not speculate about production impact.
 6. Keep each achievement brief and legible to someone who wasn't there — a teammate or manager skimming a standup. Title: a short, specific, outcome-first statement (max ~70 chars). Contribution: at most 2-3 plain sentences saying what the developer did and why it mattered — no jargon or filler. Keep each outcome claim to a single scannable bullet line; let the bullets, not the prose, carry the specifics.
 7. Confidence is your honest probability that the developer would recognize this as a real, correctly described accomplishment.
@@ -329,6 +336,12 @@ mod tests {
                 insertions: 2,
                 deletions: 3,
             }],
+            pr_links: vec![PrLink {
+                number: 5159,
+                url: "https://github.com/acme/widgets/pull/5159".into(),
+                repository: "acme/widgets".into(),
+                ts: Some("2026-07-20T10:05:00+02:00".into()),
+            }],
             ..Default::default()
         };
         let pkg = build_evidence_package("2026-07-20", &[facts]);
@@ -336,6 +349,11 @@ mod tests {
         assert_eq!(s["ref"], "session:abc");
         assert_eq!(s["commands"][0]["ref"], "cmd:abc:0");
         assert_eq!(s["commits"][0]["ref"], "commit:deadbeef");
+        assert_eq!(s["pull_requests"][0]["ref"], "pr:acme/widgets#5159");
+        assert_eq!(
+            s["pull_requests"][0]["url"],
+            "https://github.com/acme/widgets/pull/5159"
+        );
     }
 
     #[test]

@@ -44,6 +44,7 @@ impl Store {
                confidence REAL NOT NULL DEFAULT 0,
                evidence_level INTEGER NOT NULL DEFAULT 1,
                session_ids TEXT NOT NULL DEFAULT '[]',
+               pr_links TEXT NOT NULL DEFAULT '[]',
                repo TEXT,
                model TEXT,
                status TEXT NOT NULL DEFAULT 'pending',
@@ -85,6 +86,19 @@ impl Store {
              CREATE INDEX IF NOT EXISTS idx_candidates_day ON candidates(day);
              CREATE INDEX IF NOT EXISTS idx_journal_day ON journal(day);",
         )?;
+        let has_candidate_pr_links = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info('candidates') WHERE name='pr_links'
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !has_candidate_pr_links {
+            conn.execute(
+                "ALTER TABLE candidates ADD COLUMN pr_links TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )?;
+        }
         Ok(Self { conn })
     }
 
@@ -178,8 +192,8 @@ impl Store {
     pub fn insert_candidate(&self, c: &Candidate) -> Result<()> {
         self.conn.execute(
             "INSERT INTO candidates(id,day,title,contribution,outcomes,uncertainties,confidence,
-               evidence_level,session_ids,repo,model,status,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+               evidence_level,session_ids,pr_links,repo,model,status,created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 c.id,
                 c.day,
@@ -190,6 +204,7 @@ impl Store {
                 c.confidence,
                 c.evidence_level,
                 serde_json::to_string(&c.session_ids)?,
+                serde_json::to_string(&c.pr_links)?,
                 c.repo,
                 c.model,
                 c.status,
@@ -210,14 +225,15 @@ impl Store {
             confidence: r.get(6)?,
             evidence_level: r.get::<_, i64>(7)? as u8,
             session_ids: serde_json::from_str(&r.get::<_, String>(8)?).unwrap_or_default(),
-            repo: r.get(9)?,
-            model: r.get(10)?,
-            status: r.get(11)?,
-            created_at: r.get(12)?,
+            pr_links: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
+            repo: r.get(10)?,
+            model: r.get(11)?,
+            status: r.get(12)?,
+            created_at: r.get(13)?,
         })
     }
 
-    const CANDIDATE_COLS: &'static str = "id,day,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,repo,model,status,created_at";
+    const CANDIDATE_COLS: &'static str = "id,day,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,created_at";
 
     pub fn candidates_by_status(&self, status: &str) -> Result<Vec<Candidate>> {
         let sql = format!(
@@ -473,6 +489,7 @@ mod tests {
             confidence: 0.5,
             evidence_level: 1,
             session_ids: vec!["s1".into()],
+            pr_links: vec![],
             repo: None,
             model: None,
             status: status.into(),
@@ -510,6 +527,56 @@ mod tests {
             .collect();
         assert_eq!(pending, vec!["c-recent".to_string()]);
         assert_eq!(store.candidates_by_status("approved").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn candidate_pr_links_round_trip() {
+        let store = Store::open(":memory:").unwrap();
+        let mut value = candidate("c-pr", "2026-07-20", "pending");
+        value.pr_links.push(PrLink {
+            number: 5159,
+            url: "https://github.com/acme/widgets/pull/5159".into(),
+            repository: "acme/widgets".into(),
+            ts: Some("2026-07-20T10:05:00Z".into()),
+        });
+
+        store.insert_candidate(&value).unwrap();
+        let loaded = store.candidate("c-pr").unwrap();
+
+        assert_eq!(loaded.pr_links, value.pr_links);
+    }
+
+    #[test]
+    fn adds_pr_links_column_to_existing_candidate_table() {
+        let path = std::env::temp_dir().join(format!(
+            "zreport-legacy-{}-{}.db",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE candidates (
+                    id TEXT PRIMARY KEY,
+                    day TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('candidates') WHERE name='pr_links'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        drop(store);
+        std::fs::remove_file(path).unwrap();
     }
 
     fn session(id: &str) -> SessionFacts {

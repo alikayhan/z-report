@@ -96,13 +96,6 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
     Ok(updated)
 }
 
-fn has_substance(f: &SessionFacts) -> bool {
-    !f.prompts.is_empty()
-        || !f.files_changed.is_empty()
-        || !f.commands.is_empty()
-        || !f.commits.is_empty()
-}
-
 /// Run the Z-read/X-read: evaluate all sessions whose content changed since
 /// their last evaluation, one evaluator run per day, then queue candidates.
 pub fn evaluate_pending(app: &AppHandle, kind: &str) -> Result<usize> {
@@ -162,8 +155,10 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
     let mut total_candidates = 0usize;
     for (day, sessions) in by_day {
         let all_ids: Vec<String> = sessions.iter().map(|s| s.session_id.clone()).collect();
-        let substantial: Vec<SessionFacts> =
-            sessions.into_iter().filter(has_substance).collect();
+        let substantial: Vec<SessionFacts> = sessions
+            .into_iter()
+            .filter(SessionFacts::has_substance)
+            .collect();
         if substantial.is_empty() {
             let store = state.store.lock().unwrap();
             store.mark_sessions_evaluated(&all_ids)?;
@@ -283,6 +278,7 @@ fn build_candidates(
             .max()
             .unwrap_or(1);
         let repo = cited.iter().find_map(|s| s.repo_root.clone());
+        let pr_links = unique_pr_links(cited.iter().flat_map(|s| &s.pr_links));
         out.push(Candidate {
             id: format!(
                 "c-{}-{}-{}",
@@ -298,6 +294,7 @@ fn build_candidates(
             confidence: a.confidence.clamp(0.0, 1.0),
             evidence_level: level,
             session_ids: a.session_ids,
+            pr_links,
             repo,
             model: model.clone(),
             status: "pending".into(),
@@ -389,5 +386,40 @@ mod tests {
         assert!(!cands[0].uncertainties.is_empty());
         assert_eq!(cands[1].session_ids, vec!["s1".to_string()]);
         assert_eq!(cands[2].session_ids, vec!["s1".to_string()]);
+    }
+
+    #[test]
+    fn candidates_carry_deduplicated_pr_links_from_cited_sessions() {
+        let pr = PrLink {
+            number: 5159,
+            url: "https://github.com/acme/widgets/pull/5159".into(),
+            repository: "acme/widgets".into(),
+            ts: None,
+        };
+        let sessions = vec![
+            SessionFacts {
+                session_id: "s1".into(),
+                pr_links: vec![pr.clone()],
+                ..Default::default()
+            },
+            SessionFacts {
+                session_id: "s2".into(),
+                pr_links: vec![pr.clone()],
+                ..Default::default()
+            },
+        ];
+        let achievements = vec![Achievement {
+            title: "Opened the fix for review".into(),
+            contribution: "Prepared the change for review.".into(),
+            outcomes: vec![],
+            uncertainties: vec![],
+            confidence: 0.9,
+            session_ids: vec!["s1".into(), "s2".into()],
+        }];
+
+        let candidates = build_candidates("2026-07-20", &sessions, achievements, None);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].pr_links, vec![pr]);
     }
 }

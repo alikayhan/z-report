@@ -116,7 +116,8 @@ pub fn correlate(facts: &mut SessionFacts) {
 }
 
 /// Highest evidence level a set of refs deterministically supports.
-/// Refs: "commit:<sha>", "cmd:<session>:<n>", "file:<path>", "session:<id>".
+/// Refs: "commit:<sha>", "pr:<owner>/<repo>#<n>", "cmd:<session>:<n>",
+/// "file:<path>", "session:<id>".
 pub fn verify_outcome(
     outcome: &mut Outcome,
     sessions: &[&SessionFacts],
@@ -130,6 +131,18 @@ pub fn verify_outcome(
                 .iter()
                 .filter_map(|s| s.repo_root.as_deref())
                 .any(|repo| commit_exists(repo, sha));
+            if ok {
+                4
+            } else {
+                0
+            }
+        } else if let Some((repository, number)) = PrLink::parse_evidence_ref(r) {
+            let ok = sessions.iter().any(|s| {
+                !s.files_changed.is_empty()
+                    && s.pr_links
+                        .iter()
+                        .any(|pr| pr.repository == repository && pr.number == number)
+            });
             if ok {
                 4
             } else {
@@ -245,6 +258,57 @@ mod tests {
         assert!(!o.verified);
         assert_eq!(o.evidence_level, 2);
         assert_eq!(u.len(), 1);
+    }
+
+    #[test]
+    fn verifies_recorded_pr_ref_with_file_change() {
+        let mut s = session_with_cmd(false, "other");
+        s.pr_links.push(PrLink {
+            number: 5159,
+            url: "https://github.com/acme/widgets/pull/5159".into(),
+            repository: "acme/widgets".into(),
+            ts: None,
+        });
+        let mut o = Outcome {
+            claim: "Opened PR 5159".into(),
+            evidence_level: 4,
+            evidence_refs: vec!["pr:acme/widgets#5159".into()],
+            verified: false,
+        };
+        let mut u = Vec::new();
+
+        verify_outcome(&mut o, &[&s], &mut u);
+
+        assert!(o.verified);
+        assert_eq!(o.evidence_level, 4);
+        assert!(u.is_empty());
+    }
+
+    #[test]
+    fn rejects_missing_or_unaccompanied_pr_ref() {
+        let mut s = session_with_cmd(false, "other");
+        s.files_changed.clear();
+        s.pr_links.push(PrLink {
+            number: 5159,
+            url: "https://github.com/acme/widgets/pull/5159".into(),
+            repository: "acme/widgets".into(),
+            ts: None,
+        });
+        for evidence_ref in ["pr:acme/widgets#5159", "pr:acme/widgets#9999"] {
+            let mut o = Outcome {
+                claim: "Opened a PR".into(),
+                evidence_level: 4,
+                evidence_refs: vec![evidence_ref.into()],
+                verified: false,
+            };
+            let mut u = Vec::new();
+
+            verify_outcome(&mut o, &[&s], &mut u);
+
+            assert!(!o.verified);
+            assert_eq!(o.evidence_level, 1);
+            assert_eq!(u.len(), 1);
+        }
     }
 
     #[test]

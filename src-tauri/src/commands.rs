@@ -142,6 +142,7 @@ pub fn merge_candidates(state: State<AppState>, ids: Vec<String>) -> CmdResult<S
     let mut outcomes = Vec::new();
     let mut uncertainties = Vec::new();
     let mut session_ids = Vec::new();
+    let pr_links = unique_pr_links(merged.iter().flat_map(|c| &c.pr_links));
     let mut contribution = String::new();
     for c in &merged {
         outcomes.extend(c.outcomes.clone());
@@ -166,6 +167,7 @@ pub fn merge_candidates(state: State<AppState>, ids: Vec<String>) -> CmdResult<S
         confidence: merged.iter().map(|c| c.confidence).fold(1.0, f64::min),
         evidence_level: merged.iter().map(|c| c.evidence_level).max().unwrap_or(1),
         session_ids,
+        pr_links,
         repo: first.repo.clone(),
         model: first.model.clone(),
         status: "pending".into(),
