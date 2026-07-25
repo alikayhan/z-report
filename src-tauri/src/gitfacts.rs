@@ -163,7 +163,7 @@ pub fn verify_outcome(
             // external action never rises past "a change was produced".
             let found = sessions
                 .iter()
-                .flat_map(|s| &s.external_actions)
+                .flat_map(|s| s.external_changes())
                 .find(|a| &a.id == r);
             match found {
                 Some(a) if a.ok => 2,
@@ -333,6 +333,7 @@ mod tests {
                 server: "claude_ai_Atlassian".into(),
                 tool: "addCommentToJiraIssue".into(),
                 ok: true,
+                mutating: true,
                 ts: None,
                 via_delegate: false,
             },
@@ -341,6 +342,7 @@ mod tests {
                 server: "claude_ai_Notion".into(),
                 tool: "notion-update-page".into(),
                 ok: false,
+                mutating: true,
                 ts: None,
                 via_delegate: false,
             },

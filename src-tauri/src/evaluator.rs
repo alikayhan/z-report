@@ -147,7 +147,7 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
                 "kind": c.kind,
                 "delegated": c.via_delegate
             })).collect::<Vec<_>>(),
-            "external_actions": s.external_actions.iter().map(|a| json!({
+            "external_actions": s.external_changes().map(|a| json!({
                 "ref": a.id,
                 "server": a.server,
                 "tool": a.tool,
@@ -360,6 +360,7 @@ mod tests {
                 server: "claude_ai_Atlassian".into(),
                 tool: "addCommentToJiraIssue".into(),
                 ok: true,
+                mutating: true,
                 ts: Some("2026-07-20T10:06:00+02:00".into()),
                 via_delegate: false,
             }],

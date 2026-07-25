@@ -46,7 +46,7 @@ Every claim carries the highest level local facts support, and the verifier
 downgrades anything the evaluator overstated:
 
 1. **Work observed** — investigation or implementation appears in a session
-2. **Change produced** — a concrete local change exists
+2. **Change produced** — a concrete change exists, in the repo or outside it
 3. **Locally verified** — a relevant test/build/check passed
 4. **Committed** — the change exists in a local commit, or the session recorded a
    pull request alongside a file change
@@ -68,7 +68,10 @@ something outside it — commenting on a ticket, updating a document — that ca
 recorded as an external action and cited like any other fact. It stops at level 2: the
 call is known to have succeeded, but nothing on your Mac can confirm what it did, so the
 evaluator describes it as performed rather than as impact. Only calls that write are
-kept; searches, fetches, and screenshots are how the work got done, not what it produced.
+cited; searches, fetches, and screenshots are how the work got done, not what it
+produced. Nothing in a transcript says which is which, so it is inferred from the tool
+name and recorded alongside the call — a sharper guess later can reclassify calls
+already read, rather than being unable to recover what an earlier filter discarded.
 
 A session that delegates work to a sub-session is credited with it: the edits and
 commands from the delegated run fold into the parent session and carry the same evidence
@@ -131,8 +134,9 @@ Verified against Claude Code 2.1.215:
   Claude Code and undocumented. Records carry `cwd`, `gitBranch`, `version`, and
   timestamps used for Git correlation.
 - Connected-tool calls appear as `tool_use` blocks named `mcp__<server>__<tool>`, paired
-  with a `tool_result` the same way shell commands are. Whether a call changed anything
-  is inferred from the tool name, since no field in the record says so.
+  with a `tool_result` the same way shell commands are. No field in the record — and no
+  cached server manifest — states whether a call is read-only, so the tool name is the
+  only local signal.
 - Delegated runs live in sibling files (`<session-id>/subagents/agent-*.jsonl`) whose
   records are flagged `isSidechain`. They are read alongside the parent transcript and
   folded into the same session, and they contribute to the change-detection hash so

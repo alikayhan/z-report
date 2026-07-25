@@ -150,23 +150,21 @@ fn classify_command(cmd: &str) -> &'static str {
     }
 }
 
-/// Verbs that name an outward change. Matched as whole words against the tool
-/// name, so plurals and past tenses ("comments", "updated") stay reads.
 const MUTATING_VERBS: &[&str] = &[
-    "add", "append", "archive", "assign", "close", "copy", "create", "delete", "edit", "insert",
-    "merge", "move", "post", "publish", "remove", "rename", "reply", "schedule", "send", "set",
-    "submit", "update", "upload", "write",
+    "add", "append", "archive", "assign", "close", "copy", "create", "delete", "duplicate", "edit",
+    "insert", "merge", "move", "post", "publish", "remove", "rename", "reply", "schedule", "send",
+    "set", "submit", "transition", "update", "upload", "write",
 ];
 
-/// Most MCP calls read: searches, fetches, screenshots. Only the ones that write
-/// are evidence — the rest are browsing, and reporting them would be activity.
+/// Nothing in the record says whether a call changed anything, so it is inferred
+/// from the name. Whole words only: "getTransitionsForJiraIssue" is a read.
 fn mutates_external_state(tool: &str) -> bool {
-    let mut words = String::with_capacity(tool.len() + 8);
+    let mut words = String::new();
     for c in tool.chars() {
         if c == '_' || c == '-' {
             words.push(' ');
         } else {
-            if c.is_uppercase() && !words.is_empty() && !words.ends_with(' ') {
+            if c.is_uppercase() {
                 words.push(' ');
             }
             words.extend(c.to_lowercase());
@@ -375,9 +373,6 @@ fn absorb(p: &mut Parse, content: &str) {
                                     continue;
                                 };
                                 let Some(id) = b["id"].as_str() else { continue };
-                                if !mutates_external_state(tool) {
-                                    continue;
-                                }
                                 let action = ExternalAction {
                                     id: format!(
                                         "action:{}:{}",
@@ -387,6 +382,7 @@ fn absorb(p: &mut Parse, content: &str) {
                                     server: server.to_string(),
                                     tool: tool.to_string(),
                                     ok: true,
+                                    mutating: mutates_external_state(tool),
                                     ts: v["timestamp"].as_str().map(String::from),
                                     via_delegate: delegated,
                                 };
@@ -535,33 +531,28 @@ mod tests {
         for tool in [
             "addCommentToJiraIssue",
             "createJiraIssue",
-            "editJiraIssue",
+            "transitionJiraIssue",
             "notion-update-page",
-            "notion-move-pages",
             "slack_send_message",
             "upload_assets",
         ] {
             assert!(mutates_external_state(tool), "{tool} should be a mutation");
         }
+        // The plural in "getTransitionsForJiraIssue" and the "set" inside
+        // "download_assets" are why matching is by whole word.
         for tool in [
-            "searchJiraIssuesUsingJql",
-            "getVisibleJiraProjects",
             "getTransitionsForJiraIssue",
-            "getConfluenceCommentChildren",
-            "notion-fetch",
-            "notion-get-comments",
-            "preview_eval",
-            "preview_screenshot",
-            "get_guidelines",
             "download_assets",
-            "slack_read_thread",
+            "searchJiraIssuesUsingJql",
+            "notion-fetch",
+            "preview_screenshot",
         ] {
             assert!(!mutates_external_state(tool), "{tool} should be a read");
         }
     }
 
     #[test]
-    fn records_only_external_actions_that_change_something() {
+    fn cites_only_external_actions_that_change_something() {
         let dir = std::env::temp_dir().join("zreport-test/external-actions");
         let subagents = dir.join("s4/subagents");
         std::fs::create_dir_all(&subagents).unwrap();
@@ -571,15 +562,20 @@ mod tests {
                 r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{{}}}}]}},"timestamp":"{ts}"}}"#
             )
         };
+        let result = |id: &str, is_error: bool| {
+            format!(
+                r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{id}","is_error":{is_error}}}]}},"timestamp":"2026-07-20T10:10:00.000Z"}}"#
+            )
+        };
         std::fs::write(
             &parent,
             [
                 mcp("t1", "mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql", "2026-07-20T10:00:00.000Z"),
                 mcp("t2", "mcp__claude_ai_Atlassian__addCommentToJiraIssue", "2026-07-20T10:01:00.000Z"),
-                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":false}]},"timestamp":"2026-07-20T10:02:00.000Z"}"#.to_string(),
+                result("t2", false),
                 mcp("t3", "mcp__Claude_Preview__preview_screenshot", "2026-07-20T10:03:00.000Z"),
                 mcp("t4", "mcp__claude_ai_Notion__notion-update-page", "2026-07-20T10:04:00.000Z"),
-                r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","is_error":true}]},"timestamp":"2026-07-20T10:05:00.000Z"}"#.to_string(),
+                result("t4", true),
             ]
             .join("\n"),
         )
@@ -592,21 +588,39 @@ mod tests {
 
         let facts = parse_transcript(&parent, "s4", true).unwrap();
 
-        let actions: Vec<(&str, &str, bool, bool)> = facts
-            .external_actions
-            .iter()
+        let cited: Vec<(&str, &str, bool, bool)> = facts
+            .external_changes()
             .map(|a| (a.id.as_str(), a.tool.as_str(), a.ok, a.via_delegate))
             .collect();
         assert_eq!(
-            actions,
+            cited,
             vec![
-                ("action:s4:0", "addCommentToJiraIssue", true, false),
-                ("action:s4:1", "notion-update-page", false, false),
-                ("action:s4:2", "editJiraIssue", true, true),
+                ("action:s4:1", "addCommentToJiraIssue", true, false),
+                ("action:s4:3", "notion-update-page", false, false),
+                ("action:s4:4", "editJiraIssue", true, true),
             ]
         );
-        assert_eq!(facts.external_actions[0].server, "claude_ai_Atlassian");
+        // Reads are kept so a better guess can reclassify them, but never cited.
+        assert_eq!(facts.external_actions.len(), 5);
+        assert_eq!(facts.external_changes().next().unwrap().server, "claude_ai_Atlassian");
         assert!(facts.has_substance());
+    }
+
+    #[test]
+    fn read_only_external_calls_are_not_substance() {
+        let dir = std::env::temp_dir().join("zreport-test/external-reads");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("s5.jsonl");
+        std::fs::write(
+            &p,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"mcp__claude_ai_Notion__notion-fetch","input":{}}]},"timestamp":"2026-07-20T10:00:00.000Z"}"#,
+        )
+        .unwrap();
+
+        let facts = parse_transcript(&p, "s5", true).unwrap();
+
+        assert_eq!(facts.external_actions.len(), 1);
+        assert!(!facts.has_substance());
     }
 
     #[test]
