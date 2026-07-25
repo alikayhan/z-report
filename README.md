@@ -28,7 +28,8 @@ Daily flow:
 
 1. **Work normally.** Every 30 minutes (configurable) the worker scans local Claude
    Code transcripts, extracts facts (prompts, files changed, commands run, exit
-   status), and correlates them with local Git state (repo, branch, your commits).
+   status, pull requests opened), and correlates them with local Git state (repo,
+   branch, your commits).
 2. **Z-read.** At your chosen time a notification announces the day's candidates
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
@@ -68,7 +69,7 @@ URLs are kept.
 - Z Report has **no backend, no analytics, and no telemetry**.
 - The one thing that leaves your Mac: each evaluation runs `claude -p` on **your own
   Claude Code account**, sending the prepared evidence package (session excerpts,
-  file paths, command results, commit metadata) to Anthropic — the same boundary as
+  file paths, command results, commit and pull request metadata) to Anthropic — the same boundary as
   using Claude Code itself. This is disclosed in Settings.
 - The evaluator is sandboxed: fresh ephemeral run, read-only tool allowlist
   (`Read,Grep,Glob`), working directory containing only the evidence package,
@@ -106,10 +107,10 @@ Verified against Claude Code 2.1.215:
   --setting-sources ""` provide read-only, ephemeral isolation; `--max-budget-usd`
   adds a fixed per-run safety cap when the cost limit is enabled. Permission denials
   are visible in the result.
-- Transcript JSONL records are typed (`user`, `assistant`, `system`, attachments,
-  snapshots); parsing is defensive because the schema is internal to Claude Code and
-  undocumented. Records carry `cwd`, `gitBranch`, `version`, and timestamps used for
-  Git correlation.
+- Transcript JSONL records are typed (`user`, `assistant`, `system`, `pr-link`,
+  attachments, snapshots); parsing is defensive because the schema is internal to
+  Claude Code and undocumented. Records carry `cwd`, `gitBranch`, `version`, and
+  timestamps used for Git correlation.
 
 ## Non-goals (MVP)
 
