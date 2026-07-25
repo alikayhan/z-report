@@ -325,11 +325,13 @@ mod tests {
                 ok: true,
                 kind: "test".into(),
                 ts: None,
+                via_delegate: false,
             }],
             files_changed: vec![FileChange {
                 path: "/r/a.ts".into(),
                 tool: "Edit".into(),
                 count: 1,
+                via_delegate: false,
             }],
             prompts: vec!["p".into()],
             ..Default::default()
