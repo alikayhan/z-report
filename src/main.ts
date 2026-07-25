@@ -416,9 +416,9 @@ function renderSettings() {
       <div class="boundary-note">
         <strong>What leaves this Mac:</strong> evaluation runs on your own Claude Code
         account and sends the prepared evidence package (session excerpts, file paths,
-        command results including those from delegated sub-sessions, commit and pull
-        request metadata) to Anthropic — the same boundary as using
-        Claude Code itself. ${o?.claude_found ? "" : "<strong>Claude Code CLI was not found — install it or set its path below.</strong>"}
+        command results including those from delegated sub-sessions, the names of
+        external tools you used to change something, commit and pull request
+        metadata) to Anthropic — the same boundary as using Claude Code itself. ${o?.claude_found ? "" : "<strong>Claude Code CLI was not found — install it or set its path below.</strong>"}
         Z Report has no backend, no analytics, and no telemetry of its own.
       </div>
     </div>

@@ -26,6 +26,8 @@ pub struct SessionFacts {
     pub commits: Vec<CommitFact>,
     #[serde(default)]
     pub pr_links: Vec<PrLink>,
+    #[serde(default)]
+    pub external_actions: Vec<ExternalAction>,
 }
 
 impl SessionFacts {
@@ -35,6 +37,13 @@ impl SessionFacts {
             || !self.commands.is_empty()
             || !self.commits.is_empty()
             || !self.pr_links.is_empty()
+            || self.external_changes().next().is_some()
+    }
+
+    /// The only external actions that are evidence. Reads are how the work got
+    /// done, not what it produced, so nothing downstream should see them.
+    pub fn external_changes(&self) -> impl Iterator<Item = &ExternalAction> {
+        self.external_actions.iter().filter(|a| a.mutating)
     }
 }
 
@@ -53,6 +62,20 @@ pub struct CommandFact {
     pub command: String,
     pub ok: bool,
     pub kind: String,
+    pub ts: Option<String>,
+    #[serde(default)]
+    pub via_delegate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalAction {
+    pub id: String,
+    pub server: String,
+    pub tool: String,
+    pub ok: bool,
+    /// Guessed from the tool name, so it is recorded rather than filtered on:
+    /// a better guess later can reclassify calls already parsed.
+    pub mutating: bool,
     pub ts: Option<String>,
     #[serde(default)]
     pub via_delegate: bool,

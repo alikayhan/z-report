@@ -222,7 +222,10 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
 fn ref_session_id(r: &str) -> Option<&str> {
     if let Some(rest) = r.strip_prefix("session:") {
         Some(rest)
-    } else if let Some(rest) = r.strip_prefix("cmd:") {
+    } else if let Some(rest) = r
+        .strip_prefix("cmd:")
+        .or_else(|| r.strip_prefix("action:"))
+    {
         rest.rsplit_once(':').map(|(sid, _)| sid)
     } else {
         None
@@ -333,6 +336,15 @@ mod tests {
                 count: 1,
                 via_delegate: false,
             }],
+            external_actions: vec![ExternalAction {
+                id: "action:s1:0".into(),
+                server: "claude_ai_Atlassian".into(),
+                tool: "transitionJiraIssue".into(),
+                ok: true,
+                mutating: true,
+                ts: None,
+                via_delegate: false,
+            }],
             prompts: vec!["p".into()],
             ..Default::default()
         }];
@@ -379,15 +391,30 @@ mod tests {
                 confidence: 0.8,
                 session_ids: vec!["unknown".into()],
             },
+            Achievement {
+                title: "Ids only in action refs".into(),
+                contribution: "…".into(),
+                outcomes: vec![Outcome {
+                    claim: "Moved the ticket to done".into(),
+                    evidence_level: 2,
+                    evidence_refs: vec!["action:s1:0".into()],
+                    verified: false,
+                }],
+                uncertainties: vec![],
+                confidence: 0.8,
+                session_ids: vec!["unknown".into()],
+            },
         ];
         let cands = build_candidates("2026-07-20", &sessions, achievements, Some("claude-opus-5".into()));
-        assert_eq!(cands.len(), 3);
+        assert_eq!(cands.len(), 4);
         // Claimed commit-level (4) but only a passing test ref: downgraded to 3, flagged.
         assert_eq!(cands[0].evidence_level, 3);
         assert!(!cands[0].outcomes[0].verified);
         assert!(!cands[0].uncertainties.is_empty());
         assert_eq!(cands[1].session_ids, vec!["s1".to_string()]);
         assert_eq!(cands[2].session_ids, vec!["s1".to_string()]);
+        assert_eq!(cands[3].session_ids, vec!["s1".to_string()]);
+        assert_eq!(cands[3].evidence_level, 2);
     }
 
     #[test]
