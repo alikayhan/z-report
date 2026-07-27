@@ -22,9 +22,18 @@ export interface PrLink {
   ts: string | null;
 }
 
+export interface RelatedLink {
+  kind: "continuation" | "journaled";
+  target_id: string;
+  target_title: string;
+  target_day: string;
+  score: number;
+}
+
 export interface Candidate {
   id: string;
   day: string;
+  day_end: string | null;
   title: string;
   contribution: string;
   outcomes: Outcome[];
@@ -36,12 +45,14 @@ export interface Candidate {
   repo: string | null;
   model: string | null;
   status: string;
+  related: RelatedLink | null;
   created_at: string;
 }
 
 export interface JournalEntry {
   id: string;
   day: string;
+  day_end: string | null;
   title: string;
   contribution: string;
   outcomes: Outcome[];
@@ -105,6 +116,7 @@ export const api = {
   discard: (id: string) => invoke<void>("discard_candidate", { id }),
   restore: (id: string) => invoke<void>("restore_candidate", { id }),
   merge: (ids: string[]) => invoke<string>("merge_candidates", { ids }),
+  dismissRelated: (id: string) => invoke<void>("dismiss_related", { id }),
   journal: (from: string, to: string, query?: string) =>
     invoke<JournalEntry[]>("journal", { from, to, query: query ?? null }),
   confirmImpact: (id: string, note: string) => invoke<void>("confirm_impact", { id, note }),

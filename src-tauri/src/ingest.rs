@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 const MAX_PROMPTS: usize = 25;
 const PROMPT_CHARS: usize = 400;
 const RESPONSE_CHARS: usize = 1500;
+const TITLE_CHARS: usize = 120;
 
 pub fn transcripts_root() -> PathBuf {
     dirs::home_dir()
@@ -243,6 +244,12 @@ fn absorb(p: &mut Parse, content: &str) {
             continue;
         };
         let rec_type = v["type"].as_str().unwrap_or("");
+        if rec_type == "ai-title" {
+            if let Some(t) = v["aiTitle"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                p.facts.title = Some(truncate(t, TITLE_CHARS));
+            }
+            continue;
+        }
         if rec_type == "pr-link" {
             let Some(number) = v["prNumber"].as_u64() else {
                 continue;
@@ -428,7 +435,9 @@ mod tests {
         let p = dir.join("s1.jsonl");
         let lines = [
             r#"{"type":"mode","mode":"normal","sessionId":"s1"}"#,
+            r#"{"type":"ai-title","aiTitle":"Fix the failing login flow","sessionId":"s1"}"#,
             r#"{"type":"user","message":{"role":"user","content":"Fix the login bug"},"timestamp":"2026-07-20T10:00:00.000Z","cwd":"/tmp/repo","gitBranch":"main","version":"2.1.215","origin":{"kind":"human"}}"#,
+            r#"{"type":"ai-title","aiTitle":"Fix the failing login flow","sessionId":"s1"}"#,
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test"}}]},"timestamp":"2026-07-20T10:01:00.000Z"}"#,
             r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false}]},"timestamp":"2026-07-20T10:02:00.000Z"}"#,
             r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"/tmp/repo/src/auth.rs"}}]},"timestamp":"2026-07-20T10:03:00.000Z"}"#,
@@ -437,6 +446,7 @@ mod tests {
         std::fs::write(&p, lines.join("\n")).unwrap();
         let facts = parse_transcript(&p, "s1", true).unwrap();
         assert_eq!(facts.prompts, vec!["Fix the login bug"]);
+        assert_eq!(facts.title.as_deref(), Some("Fix the failing login flow"));
         assert_eq!(facts.cwd.as_deref(), Some("/tmp/repo"));
         assert_eq!(facts.git_branch.as_deref(), Some("main"));
         assert_eq!(facts.commands.len(), 1);

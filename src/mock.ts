@@ -4,10 +4,20 @@ import type { Candidate, EvalRun, JournalEntry, Overview, Settings } from "./api
 
 const today = new Date().toISOString().slice(0, 10);
 
+const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
 const candidates: Candidate[] = [
   {
     id: "c1",
     day: today,
+    day_end: null,
+    related: {
+      kind: "continuation",
+      target_id: "c2",
+      target_title: "Mapped the workout-sync pipeline ahead of the offline rewrite",
+      target_day: yesterday,
+      score: 0.34,
+    },
     title: "Fixed flaky auth-token refresh test that blocked CI",
     contribution:
       "Tracked an intermittent 401 in the session-refresh flow to a race between the keychain read and the token expiry check, serialized the refresh path, and hardened the test with a fake clock.",
@@ -35,7 +45,9 @@ const candidates: Candidate[] = [
   },
   {
     id: "c2",
-    day: today,
+    day: yesterday,
+    day_end: null,
+    related: null,
     title: "Mapped the workout-sync pipeline ahead of the offline rewrite",
     contribution:
       "Traced how workout events flow from HealthKit ingestion through the sync queue to the API client, and documented the three places conflict resolution can drop events.",
@@ -66,7 +78,8 @@ const discarded: Candidate[] = [
 const journal: JournalEntry[] = [
   {
     id: "j1",
-    day: new Date(Date.now() - 86400000).toISOString().slice(0, 10),
+    day: yesterday,
+    day_end: null,
     title: "Shipped incremental transcript ingestion for Z Report",
     contribution:
       "Built the session discovery and JSONL fact extraction with duplicate prevention, plus nine unit tests covering command classification and evidence verification.",

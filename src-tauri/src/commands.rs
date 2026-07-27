@@ -1,9 +1,9 @@
 use crate::models::*;
 use crate::pipeline::{self, AppState};
-use crate::{evaluator, export, store};
+use crate::{evaluator, export, related, store};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -85,6 +85,12 @@ pub fn update_candidate(
         .map_err(err)
 }
 
+/// Suggestions point at other pending cards, so any status change can strand
+/// one. Re-deriving is pure scoring over what is already in SQLite.
+fn relink(store: &store::Store) {
+    let _ = pipeline::link_related(store);
+}
+
 #[tauri::command]
 pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> CmdResult<()> {
     let store = state.store.lock().unwrap();
@@ -92,6 +98,7 @@ pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> Cm
     let entry = JournalEntry {
         id: format!("j-{}", c.id),
         day: c.day.clone(),
+        day_end: c.day_end.clone(),
         title: c.title.clone(),
         contribution: c.contribution.clone(),
         outcomes: c.outcomes.clone(),
@@ -106,81 +113,119 @@ pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> Cm
     store.insert_journal(&entry).map_err(err)?;
     store
         .set_candidate_status(&id, "approved", None)
-        .map_err(err)
+        .map_err(err)?;
+    relink(&store);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn discard_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
-    state
-        .store
-        .lock()
-        .unwrap()
+    let store = state.store.lock().unwrap();
+    store
         .set_candidate_status(&id, "discarded", None)
-        .map_err(err)
+        .map_err(err)?;
+    relink(&store);
+    Ok(())
 }
 
 #[tauri::command]
 pub fn restore_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
-    state
-        .store
-        .lock()
-        .unwrap()
+    let store = state.store.lock().unwrap();
+    store
         .set_candidate_status(&id, "pending", None)
-        .map_err(err)
+        .map_err(err)?;
+    relink(&store);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn merge_candidates(state: State<AppState>, ids: Vec<String>) -> CmdResult<String> {
+pub fn merge_candidates(app: AppHandle, state: State<AppState>, ids: Vec<String>) -> CmdResult<String> {
     if ids.len() < 2 {
         return Err("select at least two candidates to merge".into());
     }
-    let store = state.store.lock().unwrap();
-    let mut merged: Vec<Candidate> = Vec::new();
-    for id in &ids {
-        merged.push(store.candidate(id).map_err(err)?);
-    }
-    let first = merged[0].clone();
-    let mut outcomes = Vec::new();
-    let mut uncertainties = Vec::new();
-    let mut session_ids = Vec::new();
-    let pr_links = unique_pr_links(merged.iter().flat_map(|c| &c.pr_links));
-    let mut contribution = String::new();
-    for c in &merged {
-        outcomes.extend(c.outcomes.clone());
-        uncertainties.extend(c.uncertainties.clone());
-        for s in &c.session_ids {
-            if !session_ids.contains(s) {
-                session_ids.push(s.clone());
-            }
+    let (new_id, stitched) = {
+        let store = state.store.lock().unwrap();
+        let mut merged: Vec<Candidate> = Vec::new();
+        for id in &ids {
+            merged.push(store.candidate(id).map_err(err)?);
         }
-        if !contribution.is_empty() {
-            contribution.push_str("\n\n");
+        // A suggestion can outlive its target being approved or discarded.
+        if merged.iter().any(|c| c.status != "pending") {
+            return Err("only cards still in the review queue can be merged".into());
         }
-        contribution.push_str(c.contribution.trim());
-    }
-    let new = Candidate {
-        id: format!("m-{}", first.id),
-        day: first.day.clone(),
-        title: first.title.clone(),
-        contribution,
-        outcomes: outcomes.clone(),
-        uncertainties,
-        confidence: merged.iter().map(|c| c.confidence).fold(1.0, f64::min),
-        evidence_level: merged.iter().map(|c| c.evidence_level).max().unwrap_or(1),
-        session_ids,
-        pr_links,
-        repo: first.repo.clone(),
-        model: first.model.clone(),
-        status: "pending".into(),
-        created_at: chrono::Local::now().to_rfc3339(),
+        let new = pipeline::merge_into_one(&merged);
+        store.insert_candidate(&new).map_err(err)?;
+        for id in &ids {
+            store
+                .set_candidate_status(id, "merged", Some(&new.id))
+                .map_err(err)?;
+        }
+        let parts: Vec<(String, String)> = merged
+            .iter()
+            .map(|c| (c.title.clone(), c.contribution.clone()))
+            .collect();
+        relink(&store);
+        (new.id, (new.title, new.contribution, parts))
     };
-    store.insert_candidate(&new).map_err(err)?;
-    for id in &ids {
+    let (stitched_title, stitched_contribution, parts) = stitched;
+
+    // The stitched card is already usable, so the rewrite runs behind it: a
+    // failure here leaves the deterministic merge rather than blocking a click.
+    let rewrite_id = new_id.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let settings = state.store.lock().unwrap().settings();
+        let Ok((title, contribution)) = evaluator::rewrite_merged(&settings, &parts) else {
+            return;
+        };
+        {
+            let store = state.store.lock().unwrap();
+            let Ok(current) = store.candidate(&rewrite_id) else {
+                return;
+            };
+            // Whoever got there first wins: a rewrite must never overwrite an
+            // edit, nor resurrect prose on a card already approved or discarded.
+            if current.status != "pending"
+                || current.title != stitched_title
+                || current.contribution != stitched_contribution
+            {
+                return;
+            }
+            let _ = store.update_candidate_fields(
+                &rewrite_id,
+                &title,
+                &contribution,
+                &current.outcomes,
+            );
+        }
+        let _ = app.emit("zr:refresh", ());
+    });
+
+    Ok(new_id)
+}
+
+#[tauri::command]
+pub fn dismiss_related(state: State<AppState>, id: String) -> CmdResult<()> {
+    let store = state.store.lock().unwrap();
+    let c = store.candidate(&id).map_err(err)?;
+    let Some(link) = &c.related else {
+        return Ok(());
+    };
+    let target_sessions = match link.kind.as_str() {
+        "journaled" => store
+            .journal_since("0000-01-01")
+            .map_err(err)?
+            .into_iter()
+            .find(|e| e.id == link.target_id)
+            .map(|e| e.session_ids),
+        _ => store.candidate(&link.target_id).ok().map(|t| t.session_ids),
+    };
+    if let Some(target) = target_sessions {
         store
-            .set_candidate_status(id, "merged", Some(&new.id))
+            .dismiss_link(&related::pair_key(&c.session_ids, &target))
             .map_err(err)?;
     }
-    Ok(new.id)
+    store.set_candidate_related(&id, None).map_err(err)
 }
 
 #[tauri::command]

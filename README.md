@@ -35,8 +35,9 @@ Daily flow:
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
    evaluator run per day, so a first run backfills about two weeks of work.
-3. **Confirm.** Approve, edit, merge, or discard each candidate. Nothing enters the
-   journal without you.
+3. **Confirm.** Approve, edit, merge, or discard each candidate. Cards that look like
+   two halves of the same work say so, with the merge one click away. Nothing enters
+   the journal without you, and nothing merges without you either.
 4. **Export.** Copy or save daily/weekly/custom-range Markdown summaries for
    standups, weekly updates, or performance reviews.
 
@@ -80,6 +81,36 @@ them accurately rather than as hands-on work, and so a delegated session is no l
 mistaken for an empty one. Only the parent's prompts count as things you said, and only
 the parent's working directory defines the repository — a delegate may run in its own
 worktree.
+
+## Work carried across days
+
+An evaluation covers one day at a time, so a task you picked up on Tuesday and finished
+on Wednesday used to arrive as two cards that never saw each other. Z Report now scores
+each new card against the recent queue and the journal, and marks the ones that look like
+one piece of work.
+
+The signal that carries this is the session's own title, which Claude Code generates from
+how the session opened. That makes it a statement of what you set out to do, so two
+sessions on one thread tend to share wording even when the finished cards do not — the
+evaluator rewrites each day's card in outcome-first language, which erases the overlap
+between them. Matching requires the same repository and title wording in common; shared
+files and a shared feature branch only strengthen a match that already exists. They
+cannot create one, because the earlier half of a thread is usually a scoping session that
+changed no files at all, and a rename-everything session would otherwise look related to
+everything in its repo. Branches every session shares, like `main`, count for nothing.
+
+Nothing merges on its own. A match is a suggestion on the card with the work that
+continues it, and dismissing one is remembered against the sessions involved, so it stays
+dismissed even after that day is evaluated again. Merging is still the same manual path
+it always was. A merged achievement spans from the day the work started to the day it
+finished, and appears in any export whose range overlaps it rather than falling through
+the gap at either end. Its outcomes are carried across untouched so verified evidence
+survives; only the prose is rewritten, in the background, and if that rewrite fails the
+merged card simply keeps its assembled text.
+
+Work already approved into the journal is flagged rather than hidden: if a session you
+have already written up comes back through evaluation, the new card says so and links to
+the entry, instead of quietly appearing as a second copy of something you have read.
 
 ## Privacy and network boundary
 
@@ -130,9 +161,12 @@ Verified against Claude Code 2.1.215:
   adds a fixed per-run safety cap when the cost limit is enabled. Permission denials
   are visible in the result.
 - Transcript JSONL records are typed (`user`, `assistant`, `system`, `pr-link`,
-  attachments, snapshots); parsing is defensive because the schema is internal to
-  Claude Code and undocumented. Records carry `cwd`, `gitBranch`, `version`, and
-  timestamps used for Git correlation.
+  `ai-title`, attachments, snapshots); parsing is defensive because the schema is
+  internal to Claude Code and undocumented. Records carry `cwd`, `gitBranch`,
+  `version`, and timestamps used for Git correlation.
+- `ai-title` is emitted repeatedly through a session but never revised: across a
+  20-session sample every session carried exactly one distinct title, re-emitted up to
+  98 times. It describes the opening of the session, not its conclusion.
 - Connected-tool calls appear as `tool_use` blocks named `mcp__<server>__<tool>`, paired
   with a `tool_result` the same way shell commands are. No field in the record — and no
   cached server manifest — states whether a call is read-only, so the tool name is the
