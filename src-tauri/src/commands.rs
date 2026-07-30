@@ -77,12 +77,12 @@ pub fn update_candidate(
     contribution: String,
     outcomes: Vec<Outcome>,
 ) -> CmdResult<()> {
-    state
-        .store
-        .lock()
-        .unwrap()
+    let store = state.store.lock().unwrap();
+    store
         .update_candidate_fields(&id, &title, &contribution, &outcomes)
-        .map_err(err)
+        .map_err(err)?;
+    relink(&store);
+    Ok(())
 }
 
 /// Suggestions point at other pending cards, so any status change can strand
@@ -219,12 +219,10 @@ pub fn confirm_impact(state: State<AppState>, id: String, note: String) -> CmdRe
 
 #[tauri::command]
 pub fn delete_journal_entry(state: State<AppState>, id: String) -> CmdResult<()> {
-    state
-        .store
-        .lock()
-        .unwrap()
-        .delete_journal_entry(&id)
-        .map_err(err)
+    let store = state.store.lock().unwrap();
+    store.delete_journal_entry(&id).map_err(err)?;
+    relink(&store);
+    Ok(())
 }
 
 #[tauri::command]
