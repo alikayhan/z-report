@@ -266,11 +266,7 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
     if !status.success() {
         bail!("{}", classify_failure(&stdout, &stderr));
     }
-    let v: Value = serde_json::from_str(stdout.trim())
-        .map_err(|_| anyhow!("unexpected evaluator output (not JSON): {}", excerpt(&stdout)))?;
-    if v["is_error"].as_bool() == Some(true) {
-        bail!("{}", classify_failure(&stdout, &stderr));
-    }
+    let v = parse_run_json(&stdout, &stderr)?;
     let structured = v
         .get("structured_output")
         .cloned()
@@ -346,11 +342,12 @@ pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result
         .stdin(Stdio::null())
         .output()
         .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     if !out.status.success() {
-        bail!("{}", classify_failure("", &String::from_utf8_lossy(&out.stderr)));
+        bail!("{}", classify_failure(&stdout, &stderr));
     }
-    let v: Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim())
-        .map_err(|_| anyhow!("merge rewrite returned no JSON"))?;
+    let v = parse_run_json(&stdout, &stderr)?;
     let s = v
         .get("structured_output")
         .ok_or_else(|| anyhow!("merge rewrite returned no structured output"))?;
@@ -362,6 +359,17 @@ pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result
         bail!("merge rewrite returned empty prose");
     }
     Ok((title.trim().to_string(), contribution.trim().to_string()))
+}
+
+/// Parses a `claude --output-format json` run and rejects in-band failures,
+/// which exit 0 with "is_error": true.
+fn parse_run_json(stdout: &str, stderr: &str) -> Result<Value> {
+    let v: Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| anyhow!("unexpected evaluator output (not JSON): {}", excerpt(stdout)))?;
+    if v["is_error"].as_bool() == Some(true) {
+        bail!("{}", classify_failure(stdout, stderr));
+    }
+    Ok(v)
 }
 
 fn excerpt(s: &str) -> String {
