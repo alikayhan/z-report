@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-const EVAL_WINDOW_DAYS: i64 = 15;
+pub(crate) const EVAL_WINDOW_DAYS: i64 = 15;
 const EVIDENCE_HORIZON_DAYS: i64 = 90;
 const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 
@@ -258,7 +258,7 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
             session_ids.push(s.clone());
         }
     }
-    let day = ordered.first().map(|c| c.day.clone()).unwrap_or_default();
+    let day = ordered[0].day.clone();
     let day_end = ordered
         .iter()
         .map(|c| c.day_end().to_string())

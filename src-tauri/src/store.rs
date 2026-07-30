@@ -152,6 +152,16 @@ impl Store {
     }
 
     pub fn upsert_session(&self, facts: &SessionFacts, day: &str, content_hash: &str) -> Result<()> {
+        self.upsert_session_json(facts, day, content_hash, &serde_json::to_string(facts)?)
+    }
+
+    fn upsert_session_json(
+        &self,
+        facts: &SessionFacts,
+        day: &str,
+        content_hash: &str,
+        json: &str,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sessions(id, file_path, day, content_hash, facts, updated_at)
              VALUES(?1,?2,?3,?4,?5,?6)
@@ -164,7 +174,7 @@ impl Store {
                 facts.file_path,
                 day,
                 content_hash,
-                serde_json::to_string(facts)?,
+                json,
                 chrono::Local::now().to_rfc3339()
             ],
         )?;
@@ -205,7 +215,7 @@ impl Store {
             )?;
             return Ok(false);
         }
-        self.upsert_session(facts, day, content_hash)?;
+        self.upsert_session_json(facts, day, content_hash, &json)?;
         Ok(true)
     }
 

@@ -8,16 +8,18 @@ fn level_label(level: u8) -> &'static str {
         .unwrap_or("Work observed")
 }
 
-fn short_day(day: &str) -> String {
+fn fmt_day(day: &str, fmt: &str) -> String {
     chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d.format("%b %-d").to_string())
+        .map(|d| d.format(fmt).to_string())
         .unwrap_or_else(|_| day.to_string())
 }
 
+fn short_day(day: &str) -> String {
+    fmt_day(day, "%b %-d")
+}
+
 fn pretty_day(day: &str) -> String {
-    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d.format("%A, %B %-d, %Y").to_string())
-        .unwrap_or_else(|_| day.to_string())
+    fmt_day(day, "%A, %B %-d, %Y")
 }
 
 pub fn to_markdown(entries: &[JournalEntry], from: &str, to: &str) -> String {

@@ -114,10 +114,12 @@ function prLinksRow(links: PrLink[]): string {
   return html ? `<div class="pr-links">${html}</div>` : "";
 }
 
+const shortDayFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+
 function shortDay(day: string): string {
   const d = new Date(day + "T12:00:00");
   if (Number.isNaN(d.getTime())) return day;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(d);
+  return shortDayFmt.format(d);
 }
 
 function relatedRow(c: Candidate): string {

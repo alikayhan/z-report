@@ -2,7 +2,7 @@ use crate::models::*;
 use std::collections::HashSet;
 
 pub const RELATED_THRESHOLD: f64 = 0.20;
-const WINDOW_DAYS: f64 = 15.0;
+const WINDOW_DAYS: f64 = crate::pipeline::EVAL_WINDOW_DAYS as f64;
 
 const TITLE_WEIGHT: f64 = 0.60;
 const FILE_WEIGHT: f64 = 0.25;
