@@ -338,6 +338,35 @@ pub fn link_related(store: &Store) -> Result<()> {
     Ok(())
 }
 
+/// Rewrites a merged card's prose behind the click that created it. The
+/// stitched card is already usable, so a failure just leaves it; whoever got
+/// there first wins — a rewrite must never overwrite an edit, nor resurrect
+/// prose on a card already approved or discarded.
+pub fn rewrite_merged_in_background(app: AppHandle, stitched: Candidate, parts: Vec<(String, String)>) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let settings = state.store.lock().unwrap().settings();
+        let Ok((title, contribution)) = evaluator::rewrite_merged(&settings, &parts) else {
+            return;
+        };
+        {
+            let store = state.store.lock().unwrap();
+            let Ok(current) = store.candidate(&stitched.id) else {
+                return;
+            };
+            if current.status != "pending"
+                || current.title != stitched.title
+                || current.contribution != stitched.contribution
+            {
+                return;
+            }
+            let _ = store.update_candidate_fields(&stitched.id, &title, &contribution, &current.outcomes);
+            let _ = link_related(&store);
+        }
+        let _ = app.emit("zr:refresh", ());
+    });
+}
+
 fn ref_session_id(r: &str) -> Option<&str> {
     if let Some(rest) = r.strip_prefix("session:") {
         Some(rest)

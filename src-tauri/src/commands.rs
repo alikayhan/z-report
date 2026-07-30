@@ -3,7 +3,7 @@ use crate::pipeline::{self, AppState};
 use crate::{evaluator, export, store};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -143,7 +143,7 @@ pub fn merge_candidates(app: AppHandle, state: State<AppState>, ids: Vec<String>
     if ids.len() < 2 {
         return Err("select at least two candidates to merge".into());
     }
-    let (new_id, stitched) = {
+    let (new, parts) = {
         let store = state.store.lock().unwrap();
         let mut merged: Vec<Candidate> = Vec::new();
         for id in &ids {
@@ -165,42 +165,10 @@ pub fn merge_candidates(app: AppHandle, state: State<AppState>, ids: Vec<String>
             .map(|c| (c.title.clone(), c.contribution.clone()))
             .collect();
         relink(&store);
-        (new.id, (new.title, new.contribution, parts))
+        (new, parts)
     };
-    let (stitched_title, stitched_contribution, parts) = stitched;
-
-    // The stitched card is already usable, so the rewrite runs behind it: a
-    // failure here leaves the deterministic merge rather than blocking a click.
-    let rewrite_id = new_id.clone();
-    std::thread::spawn(move || {
-        let state = app.state::<AppState>();
-        let settings = state.store.lock().unwrap().settings();
-        let Ok((title, contribution)) = evaluator::rewrite_merged(&settings, &parts) else {
-            return;
-        };
-        {
-            let store = state.store.lock().unwrap();
-            let Ok(current) = store.candidate(&rewrite_id) else {
-                return;
-            };
-            // Whoever got there first wins: a rewrite must never overwrite an
-            // edit, nor resurrect prose on a card already approved or discarded.
-            if current.status != "pending"
-                || current.title != stitched_title
-                || current.contribution != stitched_contribution
-            {
-                return;
-            }
-            let _ = store.update_candidate_fields(
-                &rewrite_id,
-                &title,
-                &contribution,
-                &current.outcomes,
-            );
-        }
-        let _ = app.emit("zr:refresh", ());
-    });
-
+    let new_id = new.id.clone();
+    pipeline::rewrite_merged_in_background(app, new, parts);
     Ok(new_id)
 }
 
