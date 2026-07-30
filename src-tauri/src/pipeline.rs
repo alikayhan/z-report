@@ -224,16 +224,11 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
     Ok(total_candidates)
 }
 
-/// Folds several candidates into one achievement spanning their days. Outcomes
-/// carry across untouched so verified evidence survives the merge; only the
-/// prose is re-derived, and the title comes from the best-evidenced part.
 pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
     let lead = parts
         .iter()
         .min_by(|a, b| b.evidence_level.cmp(&a.evidence_level).then(a.day.cmp(&b.day)))
         .expect("merge needs at least one candidate");
-    // Everything the card carries reads in the order the work happened, not
-    // the order the developer happened to tick the boxes.
     let ordered = {
         let mut v: Vec<&Candidate> = parts.iter().collect();
         v.sort_by(|a, b| a.day.cmp(&b.day).then(a.created_at.cmp(&b.created_at)));
@@ -289,9 +284,7 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
     }
 }
 
-/// Attaches at most one suggestion to every pending candidate: work already
-/// approved into the journal, or an earlier card on the same thread. Scoring
-/// only — it writes the suggestion, never the achievement it points at.
+/// At most one suggestion per pending card; a journaled twin wins over an earlier card.
 pub fn link_related(store: &Store) -> Result<()> {
     let dismissed = store.dismissed_links()?;
     let pending = store.candidates_by_status("pending")?;
@@ -338,10 +331,8 @@ pub fn link_related(store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// Rewrites a merged card's prose behind the click that created it. The
-/// stitched card is already usable, so a failure just leaves it; whoever got
-/// there first wins — a rewrite must never overwrite an edit, nor resurrect
-/// prose on a card already approved or discarded.
+/// The stitched card is already usable, so a failed rewrite just leaves it; the
+/// guard keeps a slow rewrite from clobbering an edit or a status change.
 pub fn rewrite_merged_in_background(app: AppHandle, stitched: Candidate, parts: Vec<(String, String)>) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();

@@ -1,6 +1,4 @@
-//! Manual harness: score every pending candidate pair and print the ranking,
-//! so the threshold can be checked against a real queue before it ships.
-//! Read-only. Usage: cargo run --example continuations [path/to/zreport.db]
+//! Read-only threshold harness. Usage: cargo run --example continuations [path/to/zreport.db]
 
 use std::collections::HashMap;
 use z_report_lib::ingest;

@@ -153,8 +153,6 @@ pub struct Outcome {
     pub verified: bool,
 }
 
-/// A candidate that looks like the same work as something already in the queue
-/// or the journal. Always a suggestion: nothing merges without the developer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelatedLink {
     /// "continuation" for a pending candidate, "journaled" for an approved entry.
@@ -163,8 +161,6 @@ pub struct RelatedLink {
     pub target_title: String,
     pub target_day: String,
     pub score: f64,
-    /// Keys a dismissal to the sessions involved (see related::pair_key), so it
-    /// survives the target being deleted or the day being re-evaluated.
     #[serde(default)]
     pub pair_key: String,
 }
@@ -193,7 +189,6 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// Last day the work ran; equal to `day` unless days were merged together.
     pub fn day_end(&self) -> &str {
         self.day_end.as_deref().unwrap_or(&self.day)
     }

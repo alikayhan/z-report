@@ -181,10 +181,8 @@ impl Store {
         Ok(())
     }
 
-    /// Upserts only when a fact actually changed, and reports whether it did.
-    /// A transcript is re-read whenever its size or mtime moves, which happens
-    /// on resume and on plain touches, so re-parsing identical facts must not
-    /// put an already-evaluated session back in the queue.
+    /// A transcript is re-read whenever its size or mtime moves — a resume or a
+    /// plain touch — so re-parsing identical facts must not re-queue the session.
     pub fn upsert_session_if_changed(
         &self,
         facts: &SessionFacts,
@@ -386,7 +384,6 @@ impl Store {
             .collect())
     }
 
-    /// Approved entries still inside the comparison window, newest first.
     pub fn journal_since(&self, min_day: &str) -> Result<Vec<JournalEntry>> {
         self.journal_range(min_day, "9999-12-31", None)
     }
@@ -430,8 +427,7 @@ impl Store {
     }
 
     pub fn journal_range(&self, from: &str, to: &str, query: Option<&str>) -> Result<Vec<JournalEntry>> {
-        // An achievement spanning days must survive a range that clips either
-        // end of it, so the match is on overlap rather than on `day` alone.
+        // Match on overlap so a spanning entry survives a range that clips either end.
         let mut sql = String::from(
             "SELECT id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited
              FROM journal WHERE day<=?2 AND coalesce(day_end,day)>=?1",

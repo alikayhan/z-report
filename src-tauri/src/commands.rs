@@ -85,8 +85,7 @@ pub fn update_candidate(
     Ok(())
 }
 
-/// Suggestions point at other pending cards, so any status change can strand
-/// one. Re-deriving is pure scoring over what is already in SQLite.
+/// Suggestions point at other pending cards, so any status change can strand one.
 fn relink(store: &store::Store) {
     let _ = pipeline::link_related(store);
 }
@@ -149,7 +148,6 @@ pub fn merge_candidates(app: AppHandle, state: State<AppState>, ids: Vec<String>
         for id in &ids {
             merged.push(store.candidate(id).map_err(err)?);
         }
-        // A suggestion can outlive its target being approved or discarded.
         if merged.iter().any(|c| c.status != "pending") {
             return Err("only cards still in the review queue can be merged".into());
         }
@@ -179,8 +177,7 @@ pub fn dismiss_related(state: State<AppState>, id: String) -> CmdResult<()> {
     let Some(link) = &c.related else {
         return Ok(());
     };
-    // Links stored before pair_key existed deserialize empty; the next relink
-    // rewrites them, so there is nothing durable to record yet.
+    // Links stored before pair_key existed deserialize empty; the next relink rewrites them.
     if !link.pair_key.is_empty() {
         store.dismiss_link(&link.pair_key).map_err(err)?;
     }

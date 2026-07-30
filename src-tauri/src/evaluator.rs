@@ -300,9 +300,7 @@ Rewrite them as a single achievement. Title: short, specific, outcome-first, max
 
 Use only what the cards state. Do not invent outcomes, do not add detail that is not present, and do not describe anything as verified or shipped unless a card already does. Return only the structured output."#;
 
-/// Rewrites merged cards into one title and contribution. Deliberately narrow:
-/// no evidence package and no file tools, because outcomes are carried across
-/// untouched and only the prose needs redoing.
+/// Prose only: outcomes carry across a merge untouched, so no evidence package and no tools.
 pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result<(String, String)> {
     let cards: Vec<Value> = parts
         .iter()
@@ -361,8 +359,7 @@ pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result
     Ok((title.trim().to_string(), contribution.trim().to_string()))
 }
 
-/// Parses a `claude --output-format json` run and rejects in-band failures,
-/// which exit 0 with "is_error": true.
+/// Rejects in-band failures, which exit 0 with "is_error": true.
 fn parse_run_json(stdout: &str, stderr: &str) -> Result<Value> {
     let v: Value = serde_json::from_str(stdout.trim())
         .map_err(|_| anyhow!("unexpected evaluator output (not JSON): {}", excerpt(stdout)))?;

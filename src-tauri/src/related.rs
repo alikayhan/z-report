@@ -8,7 +8,6 @@ const TITLE_WEIGHT: f64 = 0.60;
 const FILE_WEIGHT: f64 = 0.25;
 const BRANCH_WEIGHT: f64 = 0.15;
 
-/// Branches every session in a repo shares, so agreeing on one says nothing.
 const SHARED_BRANCHES: &[&str] = &["main", "master", "develop", "trunk", "HEAD"];
 
 const STOPWORDS: &[&str] = &[
@@ -17,7 +16,6 @@ const STOPWORDS: &[&str] = &[
     "any", "not", "but", "via", "per", "out", "off", "top",
 ];
 
-/// One side of a comparison: a candidate plus the facts of the sessions it cites.
 #[derive(Debug, Clone, Default)]
 pub struct MatchFacts {
     pub id: String,
@@ -71,8 +69,7 @@ fn normalize(word: &str) -> String {
     }
 }
 
-/// Content words of a side's session titles. The repository name is dropped:
-/// every title in a repo tends to carry it, so it separates nothing.
+/// The repository name is dropped: every title in a repo carries it, so it separates nothing.
 fn title_tokens(m: &MatchFacts) -> HashSet<String> {
     let repo = m.repo_name().map(normalize);
     m.session_titles
@@ -95,7 +92,6 @@ fn parse_day(day: &str) -> Option<chrono::NaiveDate> {
     chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
 }
 
-/// Days between two candidates' date ranges; 0 when they overlap.
 fn gap_days(a: &MatchFacts, b: &MatchFacts) -> Option<i64> {
     let (a_start, a_end) = (parse_day(&a.day)?, parse_day(&a.day_end)?);
     let (b_start, b_end) = (parse_day(&b.day)?, parse_day(&b.day_end)?);
@@ -114,8 +110,6 @@ fn shares_feature_branch(a: &MatchFacts, b: &MatchFacts) -> bool {
         .any(|br| !SHARED_BRANCHES.contains(&br.as_str()))
 }
 
-/// How strongly two candidates look like one piece of work carried across days.
-/// Zero means no suggestion at all.
 pub fn score(a: &MatchFacts, b: &MatchFacts) -> f64 {
     let (Some(ra), Some(rb)) = (&a.repo, &b.repo) else {
         return 0.0;
@@ -126,9 +120,8 @@ pub fn score(a: &MatchFacts, b: &MatchFacts) -> f64 {
     let Some(gap) = gap_days(a, b) else {
         return 0.0;
     };
-    // The evaluator already clusters within a day, so a same-day pair is a
-    // split it made on purpose. Only titles can open a match: the earlier half
-    // of a continuation is usually a scoping session that changed no files.
+    // A same-day pair is a split the evaluator made on purpose. Only titles can
+    // open a match: the earlier half is often a scoping session with no files.
     let title = jaccard(&title_tokens(a), &title_tokens(b));
     if title <= 0.0 {
         return 0.0;
@@ -142,8 +135,7 @@ pub fn score(a: &MatchFacts, b: &MatchFacts) -> f64 {
     (TITLE_WEIGHT * title + FILE_WEIGHT * files + BRANCH_WEIGHT * branch) * decay
 }
 
-/// Identifies a suggested pair by the work it covers rather than by candidate
-/// id, so dismissing one survives the day being re-evaluated into fresh ids.
+/// Keyed on sessions rather than candidate ids, so a dismissal survives re-evaluation.
 pub fn pair_key(a: &[String], b: &[String]) -> String {
     let norm = |ids: &[String]| {
         let mut v: Vec<&str> = ids.iter().map(String::as_str).collect();
@@ -159,8 +151,7 @@ pub fn pair_key(a: &[String], b: &[String]) -> String {
     }
 }
 
-/// Best scoring partner for `subject` above the threshold. Only earlier work
-/// qualifies, so a pair is suggested once — on the card that continues it.
+/// Only earlier work qualifies, so a pair is suggested once — on the card that continues it.
 pub fn best_match<'a>(subject: &MatchFacts, others: &'a [MatchFacts]) -> Option<(&'a MatchFacts, f64)> {
     others
         .iter()
@@ -188,8 +179,6 @@ mod tests {
         }
     }
 
-    /// The pair these weights exist to catch: a scoping session that changed no
-    /// files, followed the next day by the session that built the thing.
     fn scoping() -> MatchFacts {
         side(
             "a",
@@ -231,8 +220,6 @@ mod tests {
         assert_eq!(score(&analytics, &building()), 0.0);
     }
 
-    /// A rename-everything session overlaps heavily on files with every other
-    /// card in its repo; without the title gate that alone would suggest merges.
     #[test]
     fn file_overlap_alone_never_suggests_a_merge() {
         let mut rename = side("d", "2026-07-18", "/r/inferometer", &["Explain project in simple terms"]);
