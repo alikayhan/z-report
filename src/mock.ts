@@ -17,6 +17,7 @@ const candidates: Candidate[] = [
       target_title: "Mapped the workout-sync pipeline ahead of the offline rewrite",
       target_day: yesterday,
       score: 0.34,
+      pair_key: "s1,s2~s3",
     },
     title: "Fixed flaky auth-token refresh test that blocked CI",
     contribution:

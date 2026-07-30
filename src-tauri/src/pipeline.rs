@@ -310,35 +310,26 @@ pub fn link_related(store: &Store) -> Result<()> {
         let journaled = journal
             .iter()
             .find(|e| e.session_ids.iter().any(|s| c.session_ids.contains(s)))
-            .map(|e| {
-                (
-                    RelatedLink {
-                        kind: "journaled".into(),
-                        target_id: e.id.clone(),
-                        target_title: e.title.clone(),
-                        target_day: e.day.clone(),
-                        score: 1.0,
-                    },
-                    e.session_ids.clone(),
-                )
+            .map(|e| RelatedLink {
+                kind: "journaled".into(),
+                target_id: e.id.clone(),
+                target_title: e.title.clone(),
+                target_day: e.day.clone(),
+                score: 1.0,
+                pair_key: related::pair_key(&c.session_ids, &e.session_ids),
             });
         let link = journaled
             .or_else(|| {
-                related::best_match(&sides[i], &sides).map(|(m, score)| {
-                    (
-                        RelatedLink {
-                            kind: "continuation".into(),
-                            target_id: m.id.clone(),
-                            target_title: m.title.clone(),
-                            target_day: m.day.clone(),
-                            score: (score * 100.0).round() / 100.0,
-                        },
-                        m.session_ids.clone(),
-                    )
+                related::best_match(&sides[i], &sides).map(|(m, score)| RelatedLink {
+                    kind: "continuation".into(),
+                    target_id: m.id.clone(),
+                    target_title: m.title.clone(),
+                    target_day: m.day.clone(),
+                    score: (score * 100.0).round() / 100.0,
+                    pair_key: related::pair_key(&c.session_ids, &m.session_ids),
                 })
             })
-            .filter(|(_, target)| !dismissed.contains(&related::pair_key(&c.session_ids, target)))
-            .map(|(link, _)| link);
+            .filter(|link| !dismissed.contains(&link.pair_key));
 
         if link.as_ref() != c.related.as_ref() {
             store.set_candidate_related(&c.id, link.as_ref())?;

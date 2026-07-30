@@ -28,6 +28,7 @@ export interface RelatedLink {
   target_title: string;
   target_day: string;
   score: number;
+  pair_key: string;
 }
 
 export interface Candidate {

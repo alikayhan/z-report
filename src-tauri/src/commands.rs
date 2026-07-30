@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::pipeline::{self, AppState};
-use crate::{evaluator, export, related, store};
+use crate::{evaluator, export, store};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -211,19 +211,10 @@ pub fn dismiss_related(state: State<AppState>, id: String) -> CmdResult<()> {
     let Some(link) = &c.related else {
         return Ok(());
     };
-    let target_sessions = match link.kind.as_str() {
-        "journaled" => store
-            .journal_since("0000-01-01")
-            .map_err(err)?
-            .into_iter()
-            .find(|e| e.id == link.target_id)
-            .map(|e| e.session_ids),
-        _ => store.candidate(&link.target_id).ok().map(|t| t.session_ids),
-    };
-    if let Some(target) = target_sessions {
-        store
-            .dismiss_link(&related::pair_key(&c.session_ids, &target))
-            .map_err(err)?;
+    // Links stored before pair_key existed deserialize empty; the next relink
+    // rewrites them, so there is nothing durable to record yet.
+    if !link.pair_key.is_empty() {
+        store.dismiss_link(&link.pair_key).map_err(err)?;
     }
     store.set_candidate_related(&id, None).map_err(err)
 }

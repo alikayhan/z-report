@@ -163,6 +163,10 @@ pub struct RelatedLink {
     pub target_title: String,
     pub target_day: String,
     pub score: f64,
+    /// Keys a dismissal to the sessions involved (see related::pair_key), so it
+    /// survives the target being deleted or the day being re-evaluated.
+    #[serde(default)]
+    pub pair_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

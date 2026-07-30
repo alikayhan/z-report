@@ -726,6 +726,7 @@ mod tests {
             target_day: "2026-07-19".into(),
             target_title: "Earlier half".into(),
             score: 0.32,
+            pair_key: "s-a~s-b".into(),
         };
 
         store.set_candidate_related("c1", Some(&link)).unwrap();
