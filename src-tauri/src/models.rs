@@ -19,6 +19,8 @@ pub struct SessionFacts {
     pub first_ts: Option<String>,
     pub last_ts: Option<String>,
     pub cli_version: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
     pub prompts: Vec<String>,
     pub final_response: Option<String>,
     pub files_changed: Vec<FileChange>,
@@ -151,10 +153,24 @@ pub struct Outcome {
     pub verified: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelatedLink {
+    /// "continuation" for a pending candidate, "journaled" for an approved entry.
+    pub kind: String,
+    pub target_id: String,
+    pub target_title: String,
+    pub target_day: String,
+    pub score: f64,
+    #[serde(default)]
+    pub pair_key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Candidate {
     pub id: String,
     pub day: String,
+    #[serde(default)]
+    pub day_end: Option<String>,
     pub title: String,
     pub contribution: String,
     pub outcomes: Vec<Outcome>,
@@ -167,13 +183,29 @@ pub struct Candidate {
     pub repo: Option<String>,
     pub model: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub related: Option<RelatedLink>,
     pub created_at: String,
+}
+
+impl Candidate {
+    pub fn day_end(&self) -> &str {
+        self.day_end.as_deref().unwrap_or(&self.day)
+    }
+}
+
+impl JournalEntry {
+    pub fn day_end(&self) -> &str {
+        self.day_end.as_deref().unwrap_or(&self.day)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
     pub id: String,
     pub day: String,
+    #[serde(default)]
+    pub day_end: Option<String>,
     pub title: String,
     pub contribution: String,
     pub outcomes: Vec<Outcome>,

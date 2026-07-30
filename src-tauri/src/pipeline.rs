@@ -1,6 +1,6 @@
 use crate::models::*;
 use crate::store::Store;
-use crate::{evaluator, gitfacts, ingest};
+use crate::{evaluator, gitfacts, ingest, related};
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
-const EVAL_WINDOW_DAYS: i64 = 15;
+pub(crate) const EVAL_WINDOW_DAYS: i64 = 15;
 const EVIDENCE_HORIZON_DAYS: i64 = 90;
 const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 
@@ -74,8 +74,9 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
             continue;
         };
         let store = state.store.lock().unwrap();
-        store.upsert_session(&facts, &day, &file.content_hash)?;
-        updated += 1;
+        if store.upsert_session_if_changed(&facts, &day, &file.content_hash)? {
+            updated += 1;
+        }
     }
 
     {
@@ -216,7 +217,145 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
             }
         }
     }
+    {
+        let store = state.store.lock().unwrap();
+        link_related(&store)?;
+    }
     Ok(total_candidates)
+}
+
+pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
+    let lead = parts
+        .iter()
+        .min_by(|a, b| b.evidence_level.cmp(&a.evidence_level).then(a.day.cmp(&b.day)))
+        .expect("merge needs at least one candidate");
+    let ordered = {
+        let mut v: Vec<&Candidate> = parts.iter().collect();
+        v.sort_by(|a, b| a.day.cmp(&b.day).then(a.created_at.cmp(&b.created_at)));
+        v
+    };
+    let mut outcomes: Vec<Outcome> = Vec::new();
+    for o in ordered.iter().flat_map(|c| &c.outcomes) {
+        let key = o.claim.trim().to_lowercase();
+        if !outcomes.iter().any(|k| k.claim.trim().to_lowercase() == key) {
+            outcomes.push(o.clone());
+        }
+    }
+    let mut uncertainties: Vec<String> = Vec::new();
+    for u in ordered.iter().flat_map(|c| &c.uncertainties) {
+        if !uncertainties.iter().any(|k| k.trim() == u.trim()) {
+            uncertainties.push(u.clone());
+        }
+    }
+    let mut session_ids: Vec<String> = Vec::new();
+    for s in ordered.iter().flat_map(|c| &c.session_ids) {
+        if !session_ids.contains(s) {
+            session_ids.push(s.clone());
+        }
+    }
+    let day = ordered[0].day.clone();
+    let day_end = ordered
+        .iter()
+        .map(|c| c.day_end().to_string())
+        .max()
+        .filter(|d| *d != day);
+    Candidate {
+        id: format!("m-{}", lead.id),
+        day,
+        day_end,
+        title: lead.title.clone(),
+        contribution: ordered
+            .iter()
+            .map(|c| c.contribution.trim())
+            .filter(|c| !c.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        outcomes,
+        uncertainties,
+        confidence: parts.iter().map(|c| c.confidence).fold(1.0, f64::min),
+        evidence_level: parts.iter().map(|c| c.evidence_level).max().unwrap_or(1),
+        session_ids,
+        pr_links: unique_pr_links(ordered.iter().flat_map(|c| &c.pr_links)),
+        repo: ordered.iter().find_map(|c| c.repo.clone()),
+        model: lead.model.clone(),
+        status: "pending".into(),
+        related: None,
+        created_at: chrono::Local::now().to_rfc3339(),
+    }
+}
+
+/// At most one suggestion per pending card; a journaled twin wins over an earlier card.
+pub fn link_related(store: &Store) -> Result<()> {
+    let dismissed = store.dismissed_links()?;
+    let pending = store.candidates_by_status("pending")?;
+    let journal = store.journal_since(&day_offset(&today(), -EVAL_WINDOW_DAYS))?;
+    let cited: Vec<String> = pending
+        .iter()
+        .flat_map(|c| c.session_ids.iter().cloned())
+        .collect();
+    let sessions = store.sessions_by_ids(&cited)?;
+    let sides: Vec<related::MatchFacts> = pending
+        .iter()
+        .map(|c| related::MatchFacts::build(c, &sessions))
+        .collect();
+
+    for (i, c) in pending.iter().enumerate() {
+        let journaled = journal
+            .iter()
+            .find(|e| e.session_ids.iter().any(|s| c.session_ids.contains(s)))
+            .map(|e| RelatedLink {
+                kind: "journaled".into(),
+                target_id: e.id.clone(),
+                target_title: e.title.clone(),
+                target_day: e.day.clone(),
+                score: 1.0,
+                pair_key: related::pair_key(&c.session_ids, &e.session_ids),
+            });
+        let link = journaled
+            .or_else(|| {
+                related::best_match(&sides[i], &sides).map(|(m, score)| RelatedLink {
+                    kind: "continuation".into(),
+                    target_id: m.id.clone(),
+                    target_title: m.title.clone(),
+                    target_day: m.day.clone(),
+                    score: (score * 100.0).round() / 100.0,
+                    pair_key: related::pair_key(&c.session_ids, &m.session_ids),
+                })
+            })
+            .filter(|link| !dismissed.contains(&link.pair_key));
+
+        if link.as_ref() != c.related.as_ref() {
+            store.set_candidate_related(&c.id, link.as_ref())?;
+        }
+    }
+    Ok(())
+}
+
+/// The stitched card is already usable, so a failed rewrite just leaves it; the
+/// guard keeps a slow rewrite from clobbering an edit or a status change.
+pub fn rewrite_merged_in_background(app: AppHandle, stitched: Candidate, parts: Vec<(String, String)>) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let settings = state.store.lock().unwrap().settings();
+        let Ok((title, contribution)) = evaluator::rewrite_merged(&settings, &parts) else {
+            return;
+        };
+        {
+            let store = state.store.lock().unwrap();
+            let Ok(current) = store.candidate(&stitched.id) else {
+                return;
+            };
+            if current.status != "pending"
+                || current.title != stitched.title
+                || current.contribution != stitched.contribution
+            {
+                return;
+            }
+            let _ = store.update_candidate_fields(&stitched.id, &title, &contribution, &current.outcomes);
+            let _ = link_related(&store);
+        }
+        let _ = app.emit("zr:refresh", ());
+    });
 }
 
 fn ref_session_id(r: &str) -> Option<&str> {
@@ -290,6 +429,7 @@ fn build_candidates(
                 i
             ),
             day: day.to_string(),
+            day_end: None,
             title: a.title,
             contribution: a.contribution,
             outcomes: a.outcomes,
@@ -301,6 +441,7 @@ fn build_candidates(
             repo,
             model: model.clone(),
             status: "pending".into(),
+            related: None,
             created_at: chrono::Local::now().to_rfc3339(),
         });
     }
@@ -415,6 +556,69 @@ mod tests {
         assert_eq!(cands[2].session_ids, vec!["s1".to_string()]);
         assert_eq!(cands[3].session_ids, vec!["s1".to_string()]);
         assert_eq!(cands[3].evidence_level, 2);
+    }
+
+    fn part(id: &str, day: &str, level: u8, title: &str, claim: &str) -> Candidate {
+        Candidate {
+            id: id.into(),
+            day: day.into(),
+            day_end: None,
+            title: title.into(),
+            contribution: format!("Did {title}."),
+            outcomes: vec![Outcome {
+                claim: claim.into(),
+                evidence_level: level,
+                evidence_refs: vec![format!("cmd:{id}:0")],
+                verified: true,
+            }],
+            uncertainties: vec!["tests were not run".into()],
+            confidence: 0.8,
+            evidence_level: level,
+            session_ids: vec![format!("s-{id}")],
+            pr_links: vec![],
+            repo: Some("/r/synapse".into()),
+            model: None,
+            status: "pending".into(),
+            related: None,
+            created_at: "2026-07-20T09:00:00+02:00".into(),
+        }
+    }
+
+    #[test]
+    fn merging_spans_days_and_keeps_every_verified_outcome() {
+        let scoping = part("a", "2026-07-19", 1, "Scoped the checks", "Approach agreed");
+        let building = part("b", "2026-07-20", 4, "Added the checks", "Committed the scanner");
+
+        let merged = merge_into_one(&[building.clone(), scoping.clone()]);
+
+        assert_eq!(merged.day, "2026-07-19", "dated from where the work started");
+        assert_eq!(merged.day_end.as_deref(), Some("2026-07-20"));
+        assert_eq!(merged.title, "Added the checks", "title from the best-evidenced part");
+        assert_eq!(merged.evidence_level, 4);
+        assert_eq!(merged.outcomes.len(), 2);
+        assert!(merged.outcomes.iter().all(|o| o.verified));
+        assert_eq!(merged.uncertainties.len(), 1, "identical uncertainties collapse");
+        assert_eq!(merged.session_ids, vec!["s-a".to_string(), "s-b".into()]);
+        assert!(merged.contribution.starts_with("Did Scoped"), "read in day order");
+    }
+
+    #[test]
+    fn merging_within_one_day_leaves_day_end_unset() {
+        let merged = merge_into_one(&[
+            part("a", "2026-07-19", 2, "First", "One"),
+            part("b", "2026-07-19", 3, "Second", "Two"),
+        ]);
+        assert_eq!(merged.day, "2026-07-19");
+        assert_eq!(merged.day_end, None);
+    }
+
+    #[test]
+    fn merging_drops_a_repeated_claim() {
+        let merged = merge_into_one(&[
+            part("a", "2026-07-19", 2, "First", "Scanner committed"),
+            part("b", "2026-07-20", 2, "Second", "  scanner committed  "),
+        ]);
+        assert_eq!(merged.outcomes.len(), 1);
     }
 
     #[test]

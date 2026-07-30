@@ -5,6 +5,7 @@ pub mod gitfacts;
 pub mod ingest;
 pub mod models;
 mod pipeline;
+pub mod related;
 mod scheduler;
 pub mod store;
 
@@ -114,6 +115,7 @@ pub fn run() {
             commands::discard_candidate,
             commands::restore_candidate,
             commands::merge_candidates,
+            commands::dismiss_related,
             commands::journal,
             commands::confirm_impact,
             commands::delete_journal_entry,

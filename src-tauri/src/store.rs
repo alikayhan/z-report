@@ -102,7 +102,15 @@ impl Store {
         )?;
         for table in ["candidates", "journal"] {
             add_column_if_missing(&conn, table, "pr_links", "TEXT NOT NULL DEFAULT '[]'")?;
+            add_column_if_missing(&conn, table, "day_end", "TEXT")?;
         }
+        add_column_if_missing(&conn, "candidates", "related", "TEXT")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS dismissed_links (
+               pair_key TEXT PRIMARY KEY,
+               dismissed_at TEXT NOT NULL
+             );",
+        )?;
         Ok(Self { conn })
     }
 
@@ -144,6 +152,16 @@ impl Store {
     }
 
     pub fn upsert_session(&self, facts: &SessionFacts, day: &str, content_hash: &str) -> Result<()> {
+        self.upsert_session_json(facts, day, content_hash, &serde_json::to_string(facts)?)
+    }
+
+    fn upsert_session_json(
+        &self,
+        facts: &SessionFacts,
+        day: &str,
+        content_hash: &str,
+        json: &str,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sessions(id, file_path, day, content_hash, facts, updated_at)
              VALUES(?1,?2,?3,?4,?5,?6)
@@ -156,11 +174,47 @@ impl Store {
                 facts.file_path,
                 day,
                 content_hash,
-                serde_json::to_string(facts)?,
+                json,
                 chrono::Local::now().to_rfc3339()
             ],
         )?;
         Ok(())
+    }
+
+    /// A transcript is re-read whenever its size or mtime moves — a resume or a
+    /// plain touch — so re-parsing identical facts must not re-queue the session.
+    pub fn upsert_session_if_changed(
+        &self,
+        facts: &SessionFacts,
+        day: &str,
+        content_hash: &str,
+    ) -> Result<bool> {
+        let json = serde_json::to_string(facts)?;
+        let prior: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT facts FROM sessions WHERE id=?1",
+                params![facts.session_id],
+                |r| r.get(0),
+            )
+            .ok();
+        if prior.as_deref() == Some(json.as_str()) {
+            // SQLite evaluates the CASE against pre-update values, so this
+            // advances evaluated_hash only for sessions that were not pending.
+            self.conn.execute(
+                "UPDATE sessions SET content_hash=?2, updated_at=?3,
+                   evaluated_hash=CASE WHEN evaluated_hash=content_hash THEN ?2 ELSE evaluated_hash END
+                 WHERE id=?1",
+                params![
+                    facts.session_id,
+                    content_hash,
+                    chrono::Local::now().to_rfc3339()
+                ],
+            )?;
+            return Ok(false);
+        }
+        self.upsert_session_json(facts, day, content_hash, &json)?;
+        Ok(true)
     }
 
     pub fn mark_sessions_evaluated(&self, ids: &[String]) -> Result<()> {
@@ -195,12 +249,13 @@ impl Store {
 
     pub fn insert_candidate(&self, c: &Candidate) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO candidates(id,day,title,contribution,outcomes,uncertainties,confidence,
-               evidence_level,session_ids,pr_links,repo,model,status,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            "INSERT INTO candidates(id,day,day_end,title,contribution,outcomes,uncertainties,confidence,
+               evidence_level,session_ids,pr_links,repo,model,status,related,created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 c.id,
                 c.day,
+                c.day_end,
                 c.title,
                 c.contribution,
                 serde_json::to_string(&c.outcomes)?,
@@ -212,6 +267,7 @@ impl Store {
                 c.repo,
                 c.model,
                 c.status,
+                c.related.as_ref().map(serde_json::to_string).transpose()?,
                 c.created_at
             ],
         )?;
@@ -222,22 +278,26 @@ impl Store {
         Ok(Candidate {
             id: r.get(0)?,
             day: r.get(1)?,
-            title: r.get(2)?,
-            contribution: r.get(3)?,
-            outcomes: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
-            uncertainties: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
-            confidence: r.get(6)?,
-            evidence_level: r.get::<_, i64>(7)? as u8,
-            session_ids: serde_json::from_str(&r.get::<_, String>(8)?).unwrap_or_default(),
-            pr_links: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
-            repo: r.get(10)?,
-            model: r.get(11)?,
-            status: r.get(12)?,
-            created_at: r.get(13)?,
+            day_end: r.get(2)?,
+            title: r.get(3)?,
+            contribution: r.get(4)?,
+            outcomes: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
+            uncertainties: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
+            confidence: r.get(7)?,
+            evidence_level: r.get::<_, i64>(8)? as u8,
+            session_ids: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
+            pr_links: serde_json::from_str(&r.get::<_, String>(10)?).unwrap_or_default(),
+            repo: r.get(11)?,
+            model: r.get(12)?,
+            status: r.get(13)?,
+            related: r
+                .get::<_, Option<String>>(14)?
+                .and_then(|s| serde_json::from_str(&s).ok()),
+            created_at: r.get(15)?,
         })
     }
 
-    const CANDIDATE_COLS: &'static str = "id,day,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,created_at";
+    const CANDIDATE_COLS: &'static str = "id,day,day_end,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,related,created_at";
 
     pub fn candidates_by_status(&self, status: &str) -> Result<Vec<Candidate>> {
         let sql = format!(
@@ -300,13 +360,57 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_candidate_related(&self, id: &str, link: Option<&RelatedLink>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE candidates SET related=?2 WHERE id=?1",
+            params![id, link.map(serde_json::to_string).transpose()?],
+        )?;
+        Ok(())
+    }
+
+    pub fn sessions_by_ids(&self, ids: &[String]) -> Result<Vec<SessionFacts>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("SELECT facts FROM sessions WHERE id IN ({placeholders})");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
+        Ok(rows
+            .filter_map(|r| r.ok())
+            .filter_map(|f| serde_json::from_str(&f).ok())
+            .collect())
+    }
+
+    pub fn journal_since(&self, min_day: &str) -> Result<Vec<JournalEntry>> {
+        self.journal_range(min_day, "9999-12-31", None)
+    }
+
+    pub fn dismiss_link(&self, pair_key: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO dismissed_links(pair_key, dismissed_at) VALUES(?1,?2)
+             ON CONFLICT(pair_key) DO NOTHING",
+            params![pair_key, chrono::Local::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn dismissed_links(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT pair_key FROM dismissed_links")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     pub fn insert_journal(&self, e: &JournalEntry) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO journal(id,day,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT INTO journal(id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
                 e.id,
                 e.day,
+                e.day_end,
                 e.title,
                 e.contribution,
                 serde_json::to_string(&e.outcomes)?,
@@ -323,9 +427,10 @@ impl Store {
     }
 
     pub fn journal_range(&self, from: &str, to: &str, query: Option<&str>) -> Result<Vec<JournalEntry>> {
+        // Match on overlap so a spanning entry survives a range that clips either end.
         let mut sql = String::from(
-            "SELECT id,day,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited
-             FROM journal WHERE day>=?1 AND day<=?2",
+            "SELECT id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited
+             FROM journal WHERE day<=?2 AND coalesce(day_end,day)>=?1",
         );
         if query.is_some() {
             sql.push_str(" AND (title LIKE ?3 OR contribution LIKE ?3)");
@@ -336,16 +441,17 @@ impl Store {
             Ok(JournalEntry {
                 id: r.get(0)?,
                 day: r.get(1)?,
-                title: r.get(2)?,
-                contribution: r.get(3)?,
-                outcomes: serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
-                evidence_level: r.get::<_, i64>(5)? as u8,
-                session_ids: serde_json::from_str(&r.get::<_, String>(6)?).unwrap_or_default(),
-                pr_links: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
-                repo: r.get(8)?,
-                model: r.get(9)?,
-                approved_at: r.get(10)?,
-                edited: r.get::<_, i64>(11)? != 0,
+                day_end: r.get(2)?,
+                title: r.get(3)?,
+                contribution: r.get(4)?,
+                outcomes: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
+                evidence_level: r.get::<_, i64>(6)? as u8,
+                session_ids: serde_json::from_str(&r.get::<_, String>(7)?).unwrap_or_default(),
+                pr_links: serde_json::from_str(&r.get::<_, String>(8)?).unwrap_or_default(),
+                repo: r.get(9)?,
+                model: r.get(10)?,
+                approved_at: r.get(11)?,
+                edited: r.get::<_, i64>(12)? != 0,
             })
         };
         let rows: Vec<JournalEntry> = if let Some(q) = query {
@@ -474,7 +580,7 @@ impl Store {
     pub fn wipe_all(&self) -> Result<()> {
         self.conn.execute_batch(
             "DELETE FROM sessions; DELETE FROM candidates; DELETE FROM journal;
-             DELETE FROM eval_runs; DELETE FROM kv;",
+             DELETE FROM eval_runs; DELETE FROM kv; DELETE FROM dismissed_links;",
         )?;
         Ok(())
     }
@@ -488,6 +594,7 @@ mod tests {
         Candidate {
             id: id.into(),
             day: day.into(),
+            day_end: None,
             title: "t".into(),
             contribution: "c".into(),
             outcomes: vec![],
@@ -499,6 +606,7 @@ mod tests {
             repo: None,
             model: None,
             status: status.into(),
+            related: None,
             created_at: "2026-06-01T09:00:00+02:00".into(),
         }
     }
@@ -564,6 +672,7 @@ mod tests {
         let entry = JournalEntry {
             id: "j-pr".into(),
             day: "2026-07-20".into(),
+            day_end: None,
             title: "t".into(),
             contribution: "c".into(),
             outcomes: vec![],
@@ -582,6 +691,63 @@ mod tests {
             .unwrap();
 
         assert_eq!(loaded[0].pr_links, vec![pr]);
+    }
+
+    #[test]
+    fn a_spanning_entry_survives_a_range_that_clips_it() {
+        let store = Store::open(":memory:").unwrap();
+        let entry = |id: &str, day: &str, day_end: Option<&str>| JournalEntry {
+            id: id.into(),
+            day: day.into(),
+            day_end: day_end.map(String::from),
+            title: id.into(),
+            contribution: "c".into(),
+            outcomes: vec![],
+            evidence_level: 2,
+            session_ids: vec![],
+            pr_links: vec![],
+            repo: None,
+            model: None,
+            approved_at: "2026-07-20T18:00:00+02:00".into(),
+            edited: false,
+        };
+        store.insert_journal(&entry("spans", "2026-07-19", Some("2026-07-20"))).unwrap();
+        store.insert_journal(&entry("single", "2026-07-17", None)).unwrap();
+
+        let ids = |from: &str, to: &str| -> Vec<String> {
+            store.journal_range(from, to, None).unwrap().into_iter().map(|e| e.id).collect()
+        };
+        assert_eq!(ids("2026-07-20", "2026-07-26"), vec!["spans"], "clipped at the start");
+        assert_eq!(ids("2026-07-13", "2026-07-19"), vec!["spans", "single"], "clipped at the end");
+        assert!(ids("2026-07-21", "2026-07-26").is_empty());
+    }
+
+    #[test]
+    fn related_links_round_trip_and_clear() {
+        let store = Store::open(":memory:").unwrap();
+        store.insert_candidate(&candidate("c1", "2026-07-20", "pending")).unwrap();
+        let link = RelatedLink {
+            kind: "continuation".into(),
+            target_id: "c0".into(),
+            target_day: "2026-07-19".into(),
+            target_title: "Earlier half".into(),
+            score: 0.32,
+            pair_key: "s-a~s-b".into(),
+        };
+
+        store.set_candidate_related("c1", Some(&link)).unwrap();
+        assert_eq!(store.candidate("c1").unwrap().related, Some(link));
+
+        store.set_candidate_related("c1", None).unwrap();
+        assert_eq!(store.candidate("c1").unwrap().related, None);
+    }
+
+    #[test]
+    fn dismissals_are_idempotent() {
+        let store = Store::open(":memory:").unwrap();
+        store.dismiss_link("a~b").unwrap();
+        store.dismiss_link("a~b").unwrap();
+        assert_eq!(store.dismissed_links().unwrap().len(), 1);
     }
 
     #[test]
@@ -607,16 +773,22 @@ mod tests {
         }
 
         let store = Store::open(&path).unwrap();
-        for table in ["candidates", "journal"] {
+        for (table, column) in [
+            ("candidates", "pr_links"),
+            ("candidates", "day_end"),
+            ("candidates", "related"),
+            ("journal", "pr_links"),
+            ("journal", "day_end"),
+        ] {
             let count: i64 = store
                 .conn
                 .query_row(
-                    "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name='pr_links'",
-                    params![table],
+                    "SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
+                    params![table, column],
                     |row| row.get(0),
                 )
                 .unwrap();
-            assert_eq!(count, 1, "{table} missing pr_links");
+            assert_eq!(count, 1, "{table} missing {column}");
         }
 
         drop(store);
@@ -628,6 +800,37 @@ mod tests {
             session_id: id.into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn touching_a_transcript_does_not_re_queue_evaluated_work() {
+        let store = Store::open(":memory:").unwrap();
+        let window = || store.pending_sessions("2026-07-31", "2026-07-01").unwrap().len();
+        let facts = session("s1");
+
+        assert!(store.upsert_session_if_changed(&facts, "2026-07-20", "100:1").unwrap());
+        store.mark_sessions_evaluated(&["s1".to_string()]).unwrap();
+        assert_eq!(window(), 0);
+
+        assert!(!store.upsert_session_if_changed(&facts, "2026-07-20", "100:2").unwrap());
+        assert_eq!(window(), 0, "an mtime bump alone must not re-queue");
+
+        let mut resumed = facts.clone();
+        resumed.prompts.push("and one more thing".into());
+        assert!(store.upsert_session_if_changed(&resumed, "2026-07-20", "200:3").unwrap());
+        assert_eq!(window(), 1, "genuinely new work must re-queue");
+    }
+
+    #[test]
+    fn touching_an_unevaluated_transcript_leaves_it_queued() {
+        let store = Store::open(":memory:").unwrap();
+        let facts = session("s1");
+        store.upsert_session_if_changed(&facts, "2026-07-20", "100:1").unwrap();
+
+        assert!(!store.upsert_session_if_changed(&facts, "2026-07-20", "100:2").unwrap());
+
+        let pending = store.pending_sessions("2026-07-31", "2026-07-01").unwrap();
+        assert_eq!(pending.len(), 1, "never evaluated, so it stays pending");
     }
 
     #[test]

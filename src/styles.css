@@ -380,6 +380,40 @@ body {
 .level-chip.l3, .level-chip.l4 { color: var(--verified); border-color: rgba(46, 125, 79, 0.4); }
 .level-chip.l5 { color: var(--stamp); border-color: rgba(87, 79, 190, 0.45); }
 
+.related {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 7px 8px;
+  border: 1px dashed var(--ink-line);
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.related-text {
+  flex: 1;
+  user-select: text;
+}
+
+.related-text b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.related-actions {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.related-actions .key {
+  padding: 2px 7px;
+  font-size: 10px;
+}
+
 .uncertainties {
   margin-top: 8px;
   font-family: var(--sans);

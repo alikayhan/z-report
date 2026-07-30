@@ -8,10 +8,18 @@ fn level_label(level: u8) -> &'static str {
         .unwrap_or("Work observed")
 }
 
-fn pretty_day(day: &str) -> String {
+fn fmt_day(day: &str, fmt: &str) -> String {
     chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d.format("%A, %B %-d, %Y").to_string())
+        .map(|d| d.format(fmt).to_string())
         .unwrap_or_else(|_| day.to_string())
+}
+
+fn short_day(day: &str) -> String {
+    fmt_day(day, "%b %-d")
+}
+
+fn pretty_day(day: &str) -> String {
+    fmt_day(day, "%A, %B %-d, %Y")
 }
 
 pub fn to_markdown(entries: &[JournalEntry], from: &str, to: &str) -> String {
@@ -35,7 +43,12 @@ pub fn to_markdown(entries: &[JournalEntry], from: &str, to: &str) -> String {
         }
         for e in list {
             md.push_str(&format!("\n### {}\n", e.title.trim()));
-            md.push_str(&format!("_{}_\n\n", level_label(e.evidence_level)));
+            let span = if e.day_end() != e.day {
+                format!("{} – {} · ", short_day(&e.day), short_day(e.day_end()))
+            } else {
+                String::new()
+            };
+            md.push_str(&format!("_{}{}_\n\n", span, level_label(e.evidence_level)));
             md.push_str(&format!("{}\n", e.contribution.trim()));
             if !e.outcomes.is_empty() {
                 md.push_str("\n");
@@ -71,6 +84,7 @@ mod tests {
         let entries = vec![JournalEntry {
             id: "j1".into(),
             day: "2026-07-20".into(),
+            day_end: None,
             title: "Fixed flaky auth test".into(),
             contribution: "Tracked down a race in token refresh.".into(),
             outcomes: vec![Outcome {
@@ -92,7 +106,25 @@ mod tests {
             approved_at: "2026-07-20T18:05:00+02:00".into(),
             edited: false,
         }];
+        let spanning = JournalEntry {
+            id: "j2".into(),
+            day: "2026-07-18".into(),
+            day_end: Some("2026-07-20".into()),
+            title: "Added contribution checks".into(),
+            contribution: "Scoped then shipped the scanner.".into(),
+            outcomes: vec![],
+            evidence_level: 4,
+            session_ids: vec!["s2".into()],
+            pr_links: vec![],
+            repo: None,
+            model: None,
+            approved_at: "2026-07-20T18:06:00+02:00".into(),
+            edited: false,
+        };
+        let entries = [entries, vec![spanning]].concat();
         let md = to_markdown(&entries, "2026-07-14", "2026-07-20");
+        assert!(md.contains("_Jul 18 – Jul 20 · Committed_"));
+        assert!(md.contains("_Locally verified_"), "single-day entries keep a bare label");
         assert!(md.contains("# Z Report — 2026-07-14 to 2026-07-20"));
         assert!(md.contains("### Fixed flaky auth test"));
         assert!(md.contains("✓ Auth test suite passes"));

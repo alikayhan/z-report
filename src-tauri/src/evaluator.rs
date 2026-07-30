@@ -126,6 +126,7 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
         "sessions": sessions.iter().map(|s| json!({
             "id": s.session_id,
             "ref": format!("session:{}", s.session_id),
+            "session_title": s.title,
             "cwd": s.cwd,
             "repo": s.repo_root,
             "branch": s.git_branch,
@@ -190,7 +191,8 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
 7. Confidence is your honest probability that the developer would recognize this as a real, correctly described accomplishment.
 8. Skip noise: exploratory sessions with no output can be omitted or grouped into one low-confidence "investigation" achievement if the investigation itself was substantial.
 9. Facts marked "delegated": true come from a sub-session the developer directed rather than steered step by step. They still count as the developer's contribution and carry the same evidence weight, but never split them into a separate achievement, and do not describe them as hands-on work.
-10. "external_actions" are calls to services outside the repository — an issue commented on, a document updated. Only the call is recorded; nothing local proves what it did. Describe them as performed ("posted the migration notes to the tracker"), never as confirmed impact ("unblocked the team"), and do not build an achievement out of external actions alone unless the action itself was the point of the work.
+10. "session_title" is generated from how a session opened, so it states what the developer set out to do, not what they achieved. Use it to understand intent and to link sessions working the same thread; never reuse it as the achievement title.
+11. "external_actions" are calls to services outside the repository — an issue commented on, a document updated. Only the call is recorded; nothing local proves what it did. Describe them as performed ("posted the migration notes to the tracker"), never as confirmed impact ("unblocked the team"), and do not build an achievement out of external actions alone unless the action itself was the point of the work.
 
 Return only the structured output."#;
 
@@ -264,11 +266,7 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
     if !status.success() {
         bail!("{}", classify_failure(&stdout, &stderr));
     }
-    let v: Value = serde_json::from_str(stdout.trim())
-        .map_err(|_| anyhow!("unexpected evaluator output (not JSON): {}", excerpt(&stdout)))?;
-    if v["is_error"].as_bool() == Some(true) {
-        bail!("{}", classify_failure(&stdout, &stderr));
-    }
+    let v = parse_run_json(&stdout, &stderr)?;
     let structured = v
         .get("structured_output")
         .cloned()
@@ -294,6 +292,81 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
         num_turns: v["num_turns"].as_i64(),
         duration_ms: v["duration_ms"].as_i64(),
     })
+}
+
+const MERGE_PROMPT: &str = r#"Several achievement cards below describe one piece of work the developer carried across more than one day. They were written separately and read as stitched fragments.
+
+Rewrite them as a single achievement. Title: short, specific, outcome-first, max ~70 characters. Contribution: at most 2-3 plain sentences a teammate who wasn't there could follow, covering the whole arc of the work rather than summarizing each fragment in turn.
+
+Use only what the cards state. Do not invent outcomes, do not add detail that is not present, and do not describe anything as verified or shipped unless a card already does. Return only the structured output."#;
+
+/// Prose only: outcomes carry across a merge untouched, so no evidence package and no tools.
+pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result<(String, String)> {
+    let cards: Vec<Value> = parts
+        .iter()
+        .map(|(title, contribution)| json!({ "title": title, "contribution": contribution }))
+        .collect();
+    let input = format!(
+        "{MERGE_PROMPT}\n\nCards:\n{}",
+        serde_json::to_string_pretty(&json!({ "cards": cards }))?
+    );
+    let schema = serde_json::to_string(&json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "contribution": { "type": "string" }
+        },
+        "required": ["title", "contribution"]
+    }))?;
+
+    let out = claude_command(settings)?
+        .args([
+            "-p",
+            &input,
+            "--model",
+            EVAL_MODEL,
+            "--output-format",
+            "json",
+            "--json-schema",
+            &schema,
+            "--tools",
+            "",
+            "--disallowedTools",
+            "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task",
+            "--no-session-persistence",
+            "--setting-sources",
+            "",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        bail!("{}", classify_failure(&stdout, &stderr));
+    }
+    let v = parse_run_json(&stdout, &stderr)?;
+    let s = v
+        .get("structured_output")
+        .ok_or_else(|| anyhow!("merge rewrite returned no structured output"))?;
+    let (Some(title), Some(contribution)) = (s["title"].as_str(), s["contribution"].as_str())
+    else {
+        bail!("merge rewrite output did not match contract");
+    };
+    if title.trim().is_empty() || contribution.trim().is_empty() {
+        bail!("merge rewrite returned empty prose");
+    }
+    Ok((title.trim().to_string(), contribution.trim().to_string()))
+}
+
+/// Rejects in-band failures, which exit 0 with "is_error": true.
+fn parse_run_json(stdout: &str, stderr: &str) -> Result<Value> {
+    let v: Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| anyhow!("unexpected evaluator output (not JSON): {}", excerpt(stdout)))?;
+    if v["is_error"].as_bool() == Some(true) {
+        bail!("{}", classify_failure(stdout, stderr));
+    }
+    Ok(v)
 }
 
 fn excerpt(s: &str) -> String {

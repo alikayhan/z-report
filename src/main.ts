@@ -114,6 +114,33 @@ function prLinksRow(links: PrLink[]): string {
   return html ? `<div class="pr-links">${html}</div>` : "";
 }
 
+const shortDayFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+
+function shortDay(day: string): string {
+  const d = new Date(day + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return day;
+  return shortDayFmt.format(d);
+}
+
+function relatedRow(c: Candidate): string {
+  const r = c.related;
+  if (!r) return "";
+  const merge =
+    r.kind === "continuation"
+      ? `<button class="key key-quiet" data-act="merge-related">Merge</button>`
+      : "";
+  const lead =
+    r.kind === "continuation"
+      ? `Looks like a continuation of <b>${esc(r.target_title)}</b> from ${esc(shortDay(r.target_day))}.`
+      : `Already in your journal as <b>${esc(r.target_title)}</b> on ${esc(shortDay(r.target_day))}.`;
+  return `<div class="related">
+    <span class="related-text">${lead}</span>
+    <span class="related-actions">${merge}
+      <button class="key key-quiet" data-act="dismiss-related">Dismiss</button>
+    </span>
+  </div>`;
+}
+
 function candidateCard(c: Candidate): string {
   if (state.editingId === c.id) return candidateEditCard(c);
   const selected = state.selection.has(c.id);
@@ -121,13 +148,15 @@ function candidateCard(c: Candidate): string {
   const uncertainties = c.uncertainties.length
     ? `<div class="uncertainties">${c.uncertainties.map((u) => esc(u)).join("<br>")}</div>`
     : "";
+  const span = c.day_end && c.day_end !== c.day ? ` · ${shortDay(c.day)} – ${shortDay(c.day_end)}` : "";
   return `<article class="receipt ${selected ? "selected" : ""}" data-id="${c.id}">
     <div class="receipt-meta">
-      <span>${esc(repoName(c.repo))}</span>
+      <span>${esc(repoName(c.repo))}${esc(span)}</span>
       <span>conf ${c.confidence.toFixed(2)}</span>
     </div>
     <h2 class="receipt-title">${esc(c.title)}</h2>
     <p class="receipt-body">${esc(c.contribution)}</p>
+    ${relatedRow(c)}
     <hr class="receipt-rule">
     ${outcomes}
     ${uncertainties}
@@ -579,6 +608,18 @@ async function handleAction(act: string, card: HTMLElement | null, target: HTMLE
       if (state.selection.has(id)) state.selection.delete(id);
       else state.selection.add(id);
       renderReview();
+      break;
+    }
+    case "merge-related": {
+      const cand = state.pending.find((c) => c.id === id);
+      if (!cand?.related) break;
+      await api.merge([cand.related.target_id, id]);
+      await refreshAll();
+      break;
+    }
+    case "dismiss-related": {
+      await api.dismissRelated(id);
+      await refreshAll();
       break;
     }
     case "toggle-drawer": {
