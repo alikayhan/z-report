@@ -4,29 +4,14 @@
       <stop offset="0" stop-color="#1D2822"/>
       <stop offset="1" stop-color="#0C110E"/>
     </linearGradient>
-    <filter id="drop" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#000000" flood-opacity="0.5"/>
-    </filter>
   </defs>
-  <rect width="1024" height="1024" rx="228" fill="url(#housing)"/>
-  <g transform="rotate(-4 512 490)" filter="url(#drop)">
-    <path fill="#F7F2E6" d="M320,180 H704 V744
-      L680,772 L656,744 L632,772 L608,744 L584,772 L560,744 L536,772 L512,744
-      L488,772 L464,744 L440,772 L416,744 L392,772 L368,744 L344,772 L320,744 Z"/>
-    <g fill="#29241A">
-      <rect x="432" y="216" width="160" height="22" rx="6"/>
-      <path d="M360,268 H664 V276 H360 Z" fill="none"/>
-      <line x1="360" y1="272" x2="664" y2="272" stroke="#29241A" stroke-width="8" stroke-dasharray="18 14"/>
-      <path d="M400,320 H624 V374 L500,546 H624 V600 H400 V546 L524,374 H400 Z"/>
-      <line x1="360" y1="644" x2="664" y2="644" stroke="#29241A" stroke-width="8" stroke-dasharray="18 14"/>
-      <rect x="360" y="676" width="128" height="22" rx="6" opacity="0.8"/>
-      <rect x="560" y="676" width="104" height="22" rx="6" opacity="0.8"/>
-    </g>
-  </g>
-  <g transform="rotate(-12 676 668)" opacity="0.92">
-    <circle cx="676" cy="668" r="112" fill="none" stroke="#574FBE" stroke-width="16"/>
-    <circle cx="676" cy="668" r="82" fill="none" stroke="#574FBE" stroke-width="7"/>
-    <path d="M628,668 L664,704 L730,626" fill="none" stroke="#574FBE" stroke-width="22"
-      stroke-linecap="round" stroke-linejoin="round"/>
-  </g>
+  <!-- 824px squircle on the 1024 canvas: Apple's macOS icon grid -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#housing)"/>
+  <path fill="#F7F2E6" d="M299,246
+    L334.5,282 L370,246 L405.5,282 L441,246 L476.5,282 L512,246
+    L547.5,282 L583,246 L618.5,282 L654,246 L689.5,282 L725,246
+    V349 L489,675 H725 V778
+    L689.5,742 L654,778 L618.5,742 L583,778 L547.5,742 L512,778
+    L476.5,742 L441,778 L405.5,742 L370,778 L334.5,742 L299,778
+    V675 L535,349 H299 Z"/>
 </svg>
