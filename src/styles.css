@@ -82,9 +82,12 @@ textarea:focus-visible {
 
 /* ---------- window frame ---------- */
 
+/* minmax(0, 1fr) rows pin panes to the viewport so inner scrollers engage;
+   an auto row would grow with content and silently clip instead. */
 #app {
   display: grid;
   grid-template-columns: 224px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
 }
 
@@ -93,6 +96,7 @@ textarea:focus-visible {
 #side {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: var(--housing-side);
   border-right: 1px solid var(--line);
   padding: 0 12px 14px;
@@ -220,6 +224,7 @@ textarea:focus-visible {
 
 #main {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -236,6 +241,7 @@ textarea:focus-visible {
 #view-review.active {
   display: grid;
   grid-template-columns: 318px 1fr;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .pane-head {
