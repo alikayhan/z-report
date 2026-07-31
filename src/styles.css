@@ -154,6 +154,21 @@ textarea:focus-visible {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
 }
 
+.nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.nav-ico {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+}
+
 .badge {
   padding: 0 6px;
   border-radius: 8px;
