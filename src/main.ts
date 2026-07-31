@@ -13,7 +13,6 @@ const state = {
   journal: [] as JournalEntry[],
   journalQuery: "",
   selId: null as string | null,
-  editing: false,
   draftOutcomes: null as Candidate["outcomes"] | null,
   editedIds: new Set<string>(),
   selection: new Set<string>(),
@@ -39,6 +38,24 @@ function esc(s: string): string {
 
 function escAttr(s: string): string {
   return esc(s).replace(/"/g, "&quot;");
+}
+
+const plural = (n: number, word: string, words = word + "s") => `${n} ${n === 1 ? word : words}`;
+
+// Two-step confirm for destructive buttons; arming decays after 2.5 s.
+function armConfirm(btn: HTMLElement, armed: string, label: string): boolean {
+  if (btn.dataset.confirm === "1") {
+    btn.dataset.confirm = "";
+    btn.textContent = label;
+    return true;
+  }
+  btn.dataset.confirm = "1";
+  btn.textContent = armed;
+  window.setTimeout(() => {
+    btn.dataset.confirm = "";
+    btn.textContent = label;
+  }, 2500);
+  return false;
 }
 
 let toastTimer: number | undefined;
@@ -142,7 +159,7 @@ function renderQueue() {
   for (const [day, cands] of [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))) {
     html += `<div class="day-head">${esc(dayHeading(day))}</div>`;
     for (const c of cands) {
-      const meta = [repoName(c.repo), `conf ${c.confidence.toFixed(2)}`, `${c.session_ids.length} session${c.session_ids.length === 1 ? "" : "s"}`].join(" · ");
+      const meta = [repoName(c.repo), `conf ${c.confidence.toFixed(2)}`, plural(c.session_ids.length, "session")].join(" · ");
       html += `<div class="row ${c.id === state.selId ? "active" : ""}" data-id="${escAttr(c.id)}" tabindex="0">
         <input type="checkbox" data-sel="${escAttr(c.id)}" title="Select for merge" ${state.selection.has(c.id) ? "checked" : ""}>
         <div><div class="row-title">${esc(c.title)}</div><div class="row-meta">${esc(meta)}</div></div>
@@ -167,6 +184,10 @@ function renderQueue() {
         : "")
     : "";
 
+  updateMergeBar();
+}
+
+function updateMergeBar() {
   const bar = $("#merge-bar");
   bar.hidden = state.selection.size < 2;
   if (!bar.hidden) $("#merge-count").textContent = `${state.selection.size} selected`;
@@ -179,11 +200,13 @@ function barcode(): string {
   let x = 0;
   let rects = "";
   for (const w of widths) {
-    rects += `<rect x="${x}" y="0" width="${w}" height="22" fill="#29241a"/>`;
+    rects += `<rect x="${x}" y="0" width="${w}" height="22" fill="currentColor"/>`;
     x += w + 2;
   }
   return `<svg viewBox="0 0 ${x} 22" preserveAspectRatio="none" aria-hidden="true">${rects}</svg>`;
 }
+
+const BARCODE = barcode();
 
 function sessionCodes(ids: string[]): string {
   const shown = ids.slice(0, 3).map((s) => s.replace(/-/g, "").slice(0, 8).toUpperCase());
@@ -191,10 +214,12 @@ function sessionCodes(ids: string[]): string {
   return shown.join(" · ") + extra;
 }
 
-function outcomeRow(o: { claim: string; evidence_level: number; verified: boolean }): string {
-  const mark = o.verified
-    ? `<span class="o-mark ok" title="Verified against local facts">✓</span>`
-    : `<span class="o-mark warn" title="Could not be fully verified locally">△</span>`;
+function outcomeRow(o: { claim: string; evidence_level: number; verified: boolean }, lead?: string): string {
+  const mark =
+    lead ??
+    (o.verified
+      ? `<span class="o-mark ok" title="Verified against local facts">✓</span>`
+      : `<span class="o-mark warn" title="Could not be fully verified locally">△</span>`);
   return `<div class="outcome">${mark}<span class="o-claim">${esc(o.claim)}</span><i class="o-leader"></i>${levelChip(o.evidence_level)}</div>`;
 }
 
@@ -229,6 +254,32 @@ function selected(): Candidate | undefined {
   return state.pending.find((c) => c.id === state.selId);
 }
 
+const editing = () => state.draftOutcomes !== null;
+
+function stopEditing() {
+  state.draftOutcomes = null;
+}
+
+// Light path for selection moves: swap the active row class and reprint the
+// receipt without rebuilding the queue DOM (keyboard navigation repeats fast).
+function selectCard(id: string) {
+  if (state.selId === id && !editing()) return;
+  state.selId = id;
+  stopEditing();
+  const rows = $("#rows");
+  rows.querySelector(".row.active")?.classList.remove("active");
+  rows.querySelector(`.row[data-id="${CSS.escape(id)}"]`)?.classList.add("active");
+  renderReceipt();
+}
+
+function startEdit() {
+  const c = selected();
+  if (!c) return;
+  state.draftOutcomes = c.outcomes.map((o) => ({ ...o }));
+  renderReceipt();
+  ($("#edit-title") as HTMLInputElement).focus();
+}
+
 function renderReceipt() {
   const scroll = $("#receipt-scroll");
   const bar = $("#actionbar");
@@ -249,10 +300,10 @@ function renderReceipt() {
     return;
   }
 
-  const sub = [daySpan(c.day, c.day_end), `${c.session_ids.length} session${c.session_ids.length === 1 ? "" : "s"}`, `conf ${c.confidence.toFixed(2)}`].join(" · ");
+  const sub = [daySpan(c.day, c.day_end), plural(c.session_ids.length, "session"), `conf ${c.confidence.toFixed(2)}`].join(" · ");
 
-  if (state.editing) {
-    const outcomes = state.draftOutcomes ?? [];
+  if (editing()) {
+    const outcomes = state.draftOutcomes!;
     scroll.innerHTML = `<article class="receipt"><div class="tear top"></div><div class="paper">
       <div class="r-store">${esc(repoName(c.repo))}</div>
       <div class="r-sub">${esc(sub)} · editing</div>
@@ -264,10 +315,7 @@ function renderReceipt() {
       ${
         outcomes.length
           ? outcomes
-              .map(
-                (o, i) =>
-                  `<div class="outcome"><button class="o-remove" data-rm="${i}" title="Remove this claim">✕</button><span class="o-claim">${esc(o.claim)}</span><i class="o-leader"></i>${levelChip(o.evidence_level)}</div>`
-              )
+              .map((o, i) => outcomeRow(o, `<button class="o-remove" data-rm="${i}" title="Remove this claim">✕</button>`))
               .join("")
           : `<div class="uncertainties">No outcome claims.</div>`
       }
@@ -295,15 +343,15 @@ function renderReceipt() {
       <p class="r-body">${esc(c.contribution)}</p>
       ${relatedRow(c)}
       <hr class="dash">
-      ${c.outcomes.map(outcomeRow).join("")}
+      ${c.outcomes.map((o) => outcomeRow(o)).join("")}
       ${uncertainties}
       ${prLinksRow(c.pr_links)}
       <hr class="dash">
       <div class="r-total">
-        <span>${c.outcomes.length} outcome${c.outcomes.length === 1 ? "" : "s"}</span>
+        <span>${plural(c.outcomes.length, "outcome")}</span>
         <span class="sum">L${c.evidence_level} · ${esc(levelLabel(c.evidence_level))}</span>
       </div>
-      <div class="r-code">${barcode()}<span>${esc(sessionCodes(c.session_ids))}</span></div>
+      <div class="r-code">${BARCODE}<span>${esc(sessionCodes(c.session_ids))}</span></div>
     </div>
     <div class="tear"></div>
   </article>`;
@@ -352,7 +400,7 @@ function entryMarkdown(e: JournalEntry): string {
 function renderJournal() {
   const roll = $("#roll");
   const entries = state.journal;
-  $("#journal-count").textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+  $("#journal-count").textContent = plural(entries.length, "entry", "entries");
 
   let inner = `<div class="roll-head">
     <div class="r-store">Z Report — approved journal</div>
@@ -390,7 +438,7 @@ function renderJournal() {
     inner += `<div class="entry" data-entry="${escAttr(e.id)}">
       <h2 class="r-title">${esc(e.title)}</h2>
       <p class="r-body">${esc(e.contribution)}</p>
-      ${e.outcomes.map(outcomeRow).join("")}
+      ${e.outcomes.map((o) => outcomeRow(o)).join("")}
       ${prLinksRow(e.pr_links)}
       <div class="entry-meta"><span>${esc(metaLeft)}</span><span>L${e.evidence_level} · ${esc(levelLabel(e.evidence_level))}</span></div>
       ${impactUi}
@@ -420,26 +468,11 @@ const PRESETS: [typeof state.exportPreset, string][] = [
 ];
 
 function exportRange(): [string, string] {
-  const today = todayStr();
-  switch (state.exportPreset) {
-    case "today":
-      return [today, today];
-    case "week":
-      return [weekStart(today), today];
-    case "7days":
-      return [shiftDay(today, -6), today];
-    case "custom":
-      return [state.exportFrom || today, state.exportTo || today];
-  }
+  return presetRange(state.exportPreset);
 }
 
-const rangeFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
-
 function rangeLabel(from: string, to: string): string {
-  const f = new Date(from + "T12:00:00");
-  const t = new Date(to + "T12:00:00");
-  if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime())) return `${from} – ${to}`;
-  return from === to ? rangeFmt.format(f) : `${rangeFmt.format(f)} – ${rangeFmt.format(t)}`;
+  return from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`;
 }
 
 function renderExport() {
@@ -459,9 +492,8 @@ function renderExport() {
   fromEl.max = todayStr();
   toEl.max = todayStr();
 
-  const n = state.exportEntries.length;
-  $("#export-count").textContent = `${n} ${n === 1 ? "entry" : "entries"}`;
-  $("#included").innerHTML = n
+  $("#export-count").textContent = plural(state.exportEntries.length, "entry", "entries");
+  $("#included").innerHTML = state.exportEntries.length
     ? `Included:<br>${state.exportEntries.map((e) => `— ${esc(e.title)}`).join("<br>")}`
     : "No approved achievements in this range yet.";
   $("#export-preview").textContent = state.exportPreview || "…";
@@ -563,7 +595,7 @@ function renderSettings() {
       <h3>Danger</h3>
       <div class="setting-row">
         <label>Erase evidence, candidates, journal, and settings</label>
-        <button class="key-dark" data-act="delete-all" style="color:var(--red-bright);border-color:rgba(178,58,50,.4)">Delete all data</button>
+        <button class="key-dark danger" data-act="delete-all">Delete all data</button>
       </div>
     </div>`;
 
@@ -613,31 +645,41 @@ async function loadRuns() {
 
 /* ---------- actions ---------- */
 
-async function approveSelected() {
+function resolveSelected(label: string, red: boolean, act: (id: string) => Promise<void>, msg: string) {
   const c = selected();
-  if (!c || state.editing) return;
+  if (!c || editing()) return;
   const next = nextAfter(c.id);
-  stampReceipt("APPROVED", false, async () => {
-    await api.approve(c.id, state.editedIds.has(c.id));
-    state.editedIds.delete(c.id);
+  stampReceipt(label, red, async () => {
+    await act(c.id);
     state.selId = next;
     await refreshAll();
     renderReview();
-    toast("Approved — filed to your journal");
+    toast(msg);
   });
 }
 
-async function discardSelected() {
-  const c = selected();
-  if (!c || state.editing) return;
-  const next = nextAfter(c.id);
-  stampReceipt("DISCARDED", true, async () => {
-    await api.discard(c.id);
-    state.selId = next;
-    await refreshAll();
-    renderReview();
-    toast("Discarded — restore it from the drawer below the queue");
-  });
+const approveSelected = () =>
+  resolveSelected(
+    "APPROVED",
+    false,
+    async (id) => {
+      await api.approve(id, state.editedIds.has(id));
+      state.editedIds.delete(id);
+    },
+    "Approved — filed to your journal",
+  );
+
+const discardSelected = () =>
+  resolveSelected("DISCARDED", true, (id) => api.discard(id), "Discarded — restore it from the drawer below the queue");
+
+async function mergeCards(ids: string[]) {
+  const newId = await api.merge(ids);
+  state.selection.clear();
+  stopEditing();
+  await refreshAll();
+  state.selId = newId;
+  renderReview();
+  toast("Merged into one card — the summary is being rewritten in the background");
 }
 
 async function handleAct(act: string, target: HTMLElement) {
@@ -650,16 +692,10 @@ async function handleAct(act: string, target: HTMLElement) {
       await discardSelected();
       break;
     case "edit":
-      if (c) {
-        state.editing = true;
-        state.draftOutcomes = c.outcomes.map((o) => ({ ...o }));
-        renderReceipt();
-        ($("#edit-title") as HTMLInputElement).focus();
-      }
+      startEdit();
       break;
     case "cancel-edit":
-      state.editing = false;
-      state.draftOutcomes = null;
+      stopEditing();
       renderReceipt();
       break;
     case "save-edit": {
@@ -670,21 +706,14 @@ async function handleAct(act: string, target: HTMLElement) {
         await api.updateCandidate(c.id, title, contribution, state.draftOutcomes ?? c.outcomes);
         state.editedIds.add(c.id);
       }
-      state.editing = false;
-      state.draftOutcomes = null;
+      stopEditing();
       await refreshAll();
       renderReview();
       break;
     }
-    case "merge-related": {
-      if (!c?.related) break;
-      const newId = await api.merge([c.related.target_id, c.id]);
-      await refreshAll();
-      state.selId = newId;
-      renderReview();
-      toast("Merged into one card — the summary is being rewritten in the background");
+    case "merge-related":
+      if (c?.related) await mergeCards([c.related.target_id, c.id]);
       break;
-    }
     case "dismiss-related":
       if (!c) break;
       await api.dismissRelated(c.id);
@@ -692,20 +721,8 @@ async function handleAct(act: string, target: HTMLElement) {
       renderReview();
       toast("Suggestion dismissed — it stays dismissed for these sessions");
       break;
-    case "toggle-drawer":
-      state.drawerOpen = !state.drawerOpen;
-      renderQueue();
-      break;
     case "delete-all": {
-      if (target.dataset.confirm !== "1") {
-        target.dataset.confirm = "1";
-        target.textContent = "Click again to erase everything";
-        window.setTimeout(() => {
-          target.dataset.confirm = "";
-          target.textContent = "Delete all data";
-        }, 3000);
-        break;
-      }
+      if (!armConfirm(target, "Click again to erase everything", "Delete all data")) break;
       await api.deleteAllData();
       state.settings = await api.getSettings();
       await loadRuns();
@@ -726,8 +743,7 @@ async function loadReview() {
   state.selection = new Set([...state.selection].filter((id) => state.pending.some((c) => c.id === id)));
   if (!state.pending.some((c) => c.id === state.selId)) {
     state.selId = state.pending[0]?.id ?? null;
-    state.editing = false;
-    state.draftOutcomes = null;
+    stopEditing();
   }
 }
 
@@ -754,6 +770,15 @@ function render() {
   }
 }
 
+async function loadView(view: View) {
+  if (view === "journal") await loadJournal();
+  if (view === "export") await loadExport();
+  if (view === "settings") {
+    state.settings = await api.getSettings();
+    await loadRuns();
+  }
+}
+
 async function switchView(view: View) {
   state.view = view;
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((b) => {
@@ -762,12 +787,7 @@ async function switchView(view: View) {
   document.querySelectorAll<HTMLElement>(".view").forEach((v) => {
     v.classList.toggle("active", v.id === "view-" + view);
   });
-  if (view === "journal") await loadJournal();
-  if (view === "export") await loadExport();
-  if (view === "settings") {
-    state.settings = await api.getSettings();
-    await loadRuns();
-  }
+  await loadView(view);
   render();
 }
 
@@ -782,11 +802,7 @@ async function boot() {
     const target = e.target as HTMLElement;
     if (target.closest("[data-sel]")) return;
     const row = target.closest<HTMLElement>("[data-id]");
-    if (!row) return;
-    state.selId = row.dataset.id!;
-    state.editing = false;
-    state.draftOutcomes = null;
-    renderReview();
+    if (row) selectCard(row.dataset.id!);
   });
   $("#rows").addEventListener("change", (e) => {
     const box = (e.target as HTMLElement).closest<HTMLInputElement>("[data-sel]");
@@ -794,20 +810,22 @@ async function boot() {
     const id = box.dataset.sel!;
     if (state.selection.has(id)) state.selection.delete(id);
     else state.selection.add(id);
-    renderQueue();
+    $("#rows").classList.toggle("selecting", state.selection.size > 0);
+    updateMergeBar();
   });
 
   $("#drawer").addEventListener("click", async (e) => {
     const target = e.target as HTMLElement;
-    const toggle = target.closest<HTMLElement>("[data-act='toggle-drawer']");
-    if (toggle) {
-      await handleAct("toggle-drawer", toggle);
+    if (target.closest("[data-act='toggle-drawer']")) {
+      state.drawerOpen = !state.drawerOpen;
+      renderQueue();
       return;
     }
     const restore = target.closest<HTMLElement>("[data-restore]");
     if (restore) {
       const id = restore.dataset.restore!;
       await api.restore(id);
+      stopEditing();
       await refreshAll();
       state.selId = id;
       renderReview();
@@ -833,13 +851,7 @@ async function boot() {
 
   $("#btn-merge").addEventListener("click", async () => {
     const ids = [...state.selection];
-    if (ids.length < 2) return;
-    const newId = await api.merge(ids);
-    state.selection.clear();
-    await refreshAll();
-    state.selId = newId;
-    renderReview();
-    toast("Merged into one card — the summary is being rewritten in the background");
+    if (ids.length >= 2) await mergeCards(ids);
   });
   $("#btn-merge-cancel").addEventListener("click", () => {
     state.selection.clear();
@@ -903,15 +915,7 @@ async function boot() {
     }
     const del = target.closest<HTMLElement>("[data-delete-entry]");
     if (del) {
-      if (del.dataset.confirm !== "1") {
-        del.dataset.confirm = "1";
-        del.textContent = "Click again to delete";
-        window.setTimeout(() => {
-          del.dataset.confirm = "";
-          del.textContent = "Delete";
-        }, 2500);
-        return;
-      }
+      if (!armConfirm(del, "Click again to delete", "Delete")) return;
       await api.deleteJournalEntry(del.dataset.deleteEntry!);
       await loadJournal();
       renderJournal();
@@ -959,58 +963,24 @@ async function boot() {
   });
 
   document.addEventListener("keydown", (e) => {
-    if ((e.target as HTMLElement).matches("input, textarea")) {
-      if (e.key === "Escape" && state.editing) {
-        state.editing = false;
-        state.draftOutcomes = null;
-        renderReceipt();
-      }
+    if (e.key === "Escape" && editing()) {
+      stopEditing();
+      renderReceipt();
       return;
     }
+    if ((e.target as HTMLElement).matches("input, textarea")) return;
     if (state.view !== "review") return;
-    const i = state.pending.findIndex((c) => c.id === state.selId);
-    switch (e.key) {
-      case "j":
-      case "ArrowDown": {
-        const next = state.pending[Math.min(i + 1, state.pending.length - 1)];
-        if (next) {
-          state.selId = next.id;
-          state.editing = false;
-          state.draftOutcomes = null;
-          renderReview();
-        }
-        e.preventDefault();
-        break;
-      }
-      case "k":
-      case "ArrowUp": {
-        const prev = state.pending[Math.max(i - 1, 0)];
-        if (prev) {
-          state.selId = prev.id;
-          state.editing = false;
-          state.draftOutcomes = null;
-          renderReview();
-        }
-        e.preventDefault();
-        break;
-      }
-      case "a":
-        void approveSelected();
-        break;
-      case "x":
-        void discardSelected();
-        break;
-      case "e":
-        if (!state.editing && selected()) void handleAct("edit", document.body);
-        break;
-      case "Escape":
-        if (state.editing) {
-          state.editing = false;
-          state.draftOutcomes = null;
-          renderReceipt();
-        }
-        break;
+    const delta = e.key === "j" || e.key === "ArrowDown" ? 1 : e.key === "k" || e.key === "ArrowUp" ? -1 : 0;
+    if (delta !== 0) {
+      const i = state.pending.findIndex((c) => c.id === state.selId);
+      const next = state.pending[Math.min(Math.max(i + delta, 0), state.pending.length - 1)];
+      if (next) selectCard(next.id);
+      e.preventDefault();
+      return;
     }
+    if (e.key === "a") approveSelected();
+    else if (e.key === "x") discardSelected();
+    else if (e.key === "e" && !editing()) startEdit();
   });
 
   $("#settings-col").addEventListener("click", actHandler);
@@ -1018,8 +988,7 @@ async function boot() {
   if (inTauri) {
     await listen("zr:refresh", async () => {
       await refreshAll();
-      if (state.view === "journal") await loadJournal();
-      if (state.view === "export") await loadExport();
+      await loadView(state.view);
       render();
     });
     await listen<boolean>("zr:evaluating", (e) => {

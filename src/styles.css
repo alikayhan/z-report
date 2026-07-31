@@ -33,6 +33,7 @@
   --tear-dim: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8'%3E%3Cpath d='M0 0 L7 8 L14 0 Z' fill='%23efe8d8'/%3E%3C/svg%3E");
 
   --counter: radial-gradient(120% 90% at 50% 0%, #19211a 0%, var(--housing) 55%, var(--housing-deep) 100%);
+  --paper-drop: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.5));
 }
 
 * {
@@ -233,6 +234,7 @@ textarea:focus-visible {
   display: none;
   flex: 1;
   min-height: 0;
+  flex-direction: column;
 }
 .view.active {
   display: flex;
@@ -262,6 +264,22 @@ textarea:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+.rows,
+.receipt-scroll,
+.roll-scroll,
+.export-scroll,
+.settings-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* the dark felt the paper sits on */
+.receipt-scroll,
+.roll-scroll,
+.export-scroll {
+  background: var(--counter);
+}
+
 /* ---------- queue list ---------- */
 
 .pane-list {
@@ -274,8 +292,6 @@ textarea:focus-visible {
 }
 
 .rows {
-  flex: 1;
-  overflow-y: auto;
   padding: 6px 0 80px;
 }
 
@@ -429,6 +445,11 @@ textarea:focus-visible {
   background: rgba(247, 242, 230, 0.07);
 }
 
+.key-dark.danger {
+  color: var(--red-bright);
+  border-color: rgba(178, 58, 50, 0.4);
+}
+
 #merge-bar {
   position: absolute;
   left: 12px;
@@ -492,7 +513,6 @@ textarea:focus-visible {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--counter);
 }
 
 .pane-detail .pane-head {
@@ -525,8 +545,6 @@ textarea:focus-visible {
 }
 
 .receipt-scroll {
-  flex: 1;
-  overflow-y: auto;
   padding: 34px 40px 130px;
 }
 
@@ -534,7 +552,7 @@ textarea:focus-visible {
   position: relative;
   max-width: 566px;
   margin: 0 auto;
-  filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.5));
+  filter: var(--paper-drop);
   animation: printin 0.3s ease-out;
 }
 
@@ -900,12 +918,6 @@ input.edit-field.title {
 
 /* ---------- journal roll ---------- */
 
-#view-journal.active,
-#view-export.active,
-#view-settings.active {
-  flex-direction: column;
-}
-
 .pane-head input[type="search"] {
   flex: 1;
   max-width: 340px;
@@ -926,16 +938,13 @@ input.edit-field.title {
 }
 
 .roll-scroll {
-  flex: 1;
-  overflow-y: auto;
   padding: 40px 40px 80px;
-  background: var(--counter);
 }
 
 .roll {
   max-width: 640px;
   margin: 0 auto;
-  filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.5));
+  filter: var(--paper-drop);
 }
 
 .roll .paper {
@@ -1047,10 +1056,7 @@ input.edit-field.title {
 /* ---------- export ---------- */
 
 .export-scroll {
-  flex: 1;
-  overflow-y: auto;
   padding: 36px 40px 60px;
-  background: var(--counter);
 }
 
 .export-grid {
@@ -1167,7 +1173,7 @@ input.edit-field.title {
 }
 
 .export-paper {
-  filter: drop-shadow(0 18px 32px rgba(0, 0, 0, 0.5));
+  filter: var(--paper-drop);
 }
 .export-paper .paper {
   background: var(--paper-dim);
@@ -1189,8 +1195,6 @@ input.edit-field.title {
 /* ---------- settings ---------- */
 
 .settings-scroll {
-  flex: 1;
-  overflow-y: auto;
   padding: 36px 40px 60px;
 }
 .settings-col {

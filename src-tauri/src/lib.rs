@@ -31,8 +31,7 @@ fn toggle_window(app: &AppHandle) {
     if win.is_visible().unwrap_or(false) && win.is_focused().unwrap_or(false) {
         let _ = win.hide();
     } else {
-        let _ = win.show();
-        let _ = win.set_focus();
+        show_window(app);
     }
 }
 
