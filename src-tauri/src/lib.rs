@@ -10,22 +10,27 @@ mod scheduler;
 pub mod store;
 
 use pipeline::AppState;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
-use tauri_plugin_positioner::{Position, WindowExt};
+
+fn show_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
 
 fn toggle_window(app: &AppHandle) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
-    if win.is_visible().unwrap_or(false) {
+    if win.is_visible().unwrap_or(false) && win.is_focused().unwrap_or(false) {
         let _ = win.hide();
     } else {
-        let _ = win.move_window(Position::TrayBottomCenter);
         let _ = win.show();
         let _ = win.set_focus();
     }
@@ -36,16 +41,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_positioner::init())
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-
             let store = store::Store::open_default()?;
             app.manage(AppState {
                 store: Mutex::new(store),
                 evaluating: AtomicBool::new(false),
-                pinned: AtomicBool::new(false),
                 metered: Mutex::new(None),
             });
 
@@ -71,7 +71,7 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => toggle_window(app),
+                    "open" => show_window(app),
                     "xread" => {
                         let handle = app.clone();
                         std::thread::spawn(move || {
@@ -82,7 +82,6 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
@@ -97,12 +96,11 @@ pub fn run() {
             scheduler::spawn(app.handle().clone());
             Ok(())
         })
+        // Closing the window keeps the app alive in the menu bar.
         .on_window_event(|window, event| {
-            if let WindowEvent::Focused(false) = event {
-                let state = window.app_handle().state::<AppState>();
-                if !state.pinned.load(Ordering::SeqCst) {
-                    let _ = window.hide();
-                }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -124,10 +122,13 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::eval_runs,
-            commands::set_pinned,
-            commands::hide_window,
             commands::delete_all_data,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Z Report");
+        .build(tauri::generate_context!())
+        .expect("error while running Z Report")
+        .run(|app, event| {
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_window(app);
+            }
+        });
 }
