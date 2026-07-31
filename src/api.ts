@@ -127,8 +127,6 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   evalRuns: () => invoke<EvalRun[]>("eval_runs"),
-  setPinned: (pinned: boolean) => invoke<void>("set_pinned", { pinned }),
-  hideWindow: () => invoke<void>("hide_window"),
   deleteAllData: () => invoke<void>("delete_all_data"),
 };
 

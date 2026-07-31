@@ -3,7 +3,7 @@ use crate::pipeline::{self, AppState};
 use crate::{evaluator, export, store};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -256,20 +256,6 @@ pub fn set_settings(state: State<AppState>, settings: Settings) -> CmdResult<()>
 #[tauri::command]
 pub fn eval_runs(state: State<AppState>) -> CmdResult<Vec<EvalRun>> {
     state.store.lock().unwrap().recent_eval_runs(20).map_err(err)
-}
-
-#[tauri::command]
-pub fn set_pinned(state: State<AppState>, pinned: bool) -> CmdResult<()> {
-    state.pinned.store(pinned, Ordering::SeqCst);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn hide_window(app: AppHandle) -> CmdResult<()> {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
-    Ok(())
 }
 
 #[tauri::command]

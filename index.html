@@ -3,46 +3,101 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
     <title>Z Report</title>
   </head>
   <body>
-    <div id="panel">
-      <header id="header" data-tauri-drag-region>
-        <div class="masthead" data-tauri-drag-region>
+    <div id="app">
+      <aside id="side">
+        <div class="drag-strip" data-tauri-drag-region></div>
+        <div class="brand" data-tauri-drag-region>
           <span class="wordmark" data-tauri-drag-region>Z&thinsp;REPORT</span>
-          <span class="header-actions">
-            <button id="btn-pin" class="icon-btn" title="Keep window open" aria-label="Keep window open" aria-pressed="false">
-              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5l4 4-1.8.6-2.5 2.5-.3 3.4-2.4-2.4L3 14l-.9-.9 3.4-3.5-2.4-2.4 3.4-.3L9 4.3z"/></svg>
-            </button>
-            <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.076.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.004.827c-.292.24-.437.613-.43.991a6.932 6.932 0 0 1 0 .255c-.007.378.138.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.297 2.247a1.125 1.125 0 0 1-1.37.491l-1.216-.456c-.356-.133-.751-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.332.183-.582.495-.644.869l-.214 1.281c-.09.543-.56.94-1.11.94h-2.593c-.55 0-1.02-.397-1.11-.94l-.213-1.281c-.063-.374-.313-.686-.645-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c-.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281Z"/><path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
-            </button>
-          </span>
         </div>
-        <div class="eyebrow" data-tauri-drag-region>
-          <span id="status-line">·</span>
-          <span id="evaluating" class="evaluating" hidden>reading the tape<span class="dots"><i>.</i><i>.</i><i>.</i></span></span>
+        <nav aria-label="Views">
+          <button class="nav-item active" data-view="review">Review<span class="badge" id="badge" hidden></span></button>
+          <button class="nav-item" data-view="journal">Journal</button>
+          <button class="nav-item" data-view="export">Export</button>
+        </nav>
+        <div class="side-status" id="side-status"></div>
+        <div class="side-foot">
+          <button class="nav-item" data-view="settings">Settings</button>
+          <p class="privacy">All data stays on this Mac</p>
+          <span class="model" id="side-model"></span>
         </div>
-      </header>
+      </aside>
 
-      <nav id="tabs" aria-label="Views">
-        <button class="tab active" data-view="review">Review<span id="badge-pending" class="badge" hidden></span></button>
-        <button class="tab" data-view="journal">Journal</button>
-        <button class="tab" data-view="export">Export</button>
-      </nav>
+      <main id="main">
+        <section class="view active" id="view-review">
+          <div class="pane-list">
+            <header class="pane-head" data-tauri-drag-region><span id="queue-count" data-tauri-drag-region></span></header>
+            <div class="rows" id="rows"></div>
+            <div class="drawer" id="drawer" hidden></div>
+            <div id="merge-bar" hidden>
+              <span id="merge-count"></span>
+              <span class="spacer"></span>
+              <button class="key-ink violet" id="btn-merge">Merge into one</button>
+              <button class="key-ink" id="btn-merge-cancel">Cancel</button>
+            </div>
+          </div>
+          <div class="pane-detail">
+            <header class="pane-head" data-tauri-drag-region>
+              <span id="crumb" data-tauri-drag-region></span>
+              <span class="head-actions">
+                <span class="evaluating" id="evaluating" hidden>reading the tape<i>.</i><i>.</i><i>.</i></span>
+                <button class="key-dark" id="btn-xread">Run X-read now</button>
+              </span>
+            </header>
+            <div class="receipt-scroll" id="receipt-scroll"></div>
+            <div class="actionbar" id="actionbar"></div>
+          </div>
+        </section>
 
-      <main id="content" tabindex="-1"></main>
+        <section class="view" id="view-journal">
+          <header class="pane-head" data-tauri-drag-region>
+            <input type="search" id="journal-search" placeholder="Search your journal" />
+            <span id="journal-count" data-tauri-drag-region></span>
+          </header>
+          <div class="roll-scroll"><div class="roll" id="roll"></div></div>
+        </section>
 
-      <footer id="footer">
-        <span class="footer-note">All data stays on this Mac</span>
-        <span id="footer-model" class="footer-model"></span>
-      </footer>
+        <section class="view" id="view-export">
+          <header class="pane-head" data-tauri-drag-region>
+            <span data-tauri-drag-region>Export</span>
+            <span id="export-count" data-tauri-drag-region></span>
+          </header>
+          <div class="export-scroll">
+            <div class="export-grid">
+              <div class="export-controls">
+                <h3>Range</h3>
+                <div class="chip-col" id="chips"></div>
+                <div class="range-inputs" id="custom-range" hidden>
+                  <input type="date" id="export-from" />
+                  <span>to</span>
+                  <input type="date" id="export-to" />
+                </div>
+                <div class="included" id="included"></div>
+                <div class="export-actions">
+                  <button class="keycap" id="btn-copy">Copy Markdown</button>
+                  <button class="keycap paperkey" id="btn-save">Save to file…</button>
+                </div>
+                <p class="export-hint">Paste into a standup note, a weekly update, or a performance review.</p>
+              </div>
+              <div class="export-paper">
+                <div class="tear top"></div>
+                <div class="paper"><pre id="export-preview"></pre></div>
+                <div class="tear"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings">
+          <header class="pane-head" data-tauri-drag-region><span data-tauri-drag-region>Settings</span></header>
+          <div class="settings-scroll"><div class="settings-col" id="settings-col"></div></div>
+        </section>
+      </main>
     </div>
-    <div id="merge-bar" hidden>
-      <span id="merge-count"></span>
-      <button id="btn-merge" class="key key-primary">Merge into one</button>
-      <button id="btn-merge-cancel" class="key key-quiet">Cancel</button>
-    </div>
+    <div id="toast" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

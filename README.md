@@ -1,7 +1,9 @@
 # Z Report
 
-A fully local macOS menu-bar app that turns Claude Code-assisted work into a private,
-evidence-backed record of achievements. Like the end-of-day Z-report a cash register
+A fully local macOS app that turns Claude Code-assisted work into a private,
+evidence-backed record of achievements. It opens as a regular desktop window and
+keeps a menu-bar icon; closing the window leaves it collecting evidence and running
+the evening Z-read in the background. Like the end-of-day Z-report a cash register
 prints, it totals what was actually recorded and closes the books on the day: each
 evening it reconstructs accomplishments from local session transcripts and Git facts,
 then asks you to approve, edit, merge, or discard them.
@@ -11,7 +13,7 @@ It celebrates outcomes, not activity. No tracking, no scoring, no dashboards.
 ## How it works
 
 ```
-macOS menu-bar UI (Tauri)
+macOS desktop window + menu-bar tray (Tauri)
         ↓
 background worker + scheduler (Rust)
         ↓
@@ -35,9 +37,11 @@ Daily flow:
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
    evaluator run per day, so a first run backfills about two weeks of work.
-3. **Confirm.** Approve, edit, merge, or discard each candidate. Cards that look like
-   two halves of the same work say so, with the merge one click away. Nothing enters
-   the journal without you, and nothing merges without you either.
+3. **Confirm.** Approve, edit, merge, or discard each candidate — by click or with
+   the keyboard (J/K moves through the queue, A approves, E edits, X discards).
+   Cards that look like two halves of the same work say so, with the merge one
+   click away. Nothing enters the journal without you, and nothing merges without
+   you either.
 4. **Export.** Copy or save daily/weekly/custom-range Markdown summaries for
    standups, weekly updates, or performance reviews.
 

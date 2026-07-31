@@ -15,7 +15,6 @@ const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 pub struct AppState {
     pub store: Mutex<Store>,
     pub evaluating: AtomicBool,
-    pub pinned: AtomicBool,
     /// None until the startup billing-mode probe finishes; see evaluator::is_metered.
     pub metered: Mutex<Option<bool>>,
 }
