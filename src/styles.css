@@ -227,15 +227,6 @@ textarea:focus-visible {
   padding: 0 10px;
 }
 
-.model {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
-  padding: 0 10px;
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- main / views ---------- */
 
 #main {

@@ -136,7 +136,6 @@ function renderSidebar() {
     if (!o.claude_found) rows.push(`<div class="srow warn"><span>Claude CLI</span><b>missing</b></div>`);
   }
   $("#side-status").innerHTML = rows.join("");
-  $("#side-model").textContent = o ? o.model : "";
   $("#evaluating").hidden = !o?.evaluating;
 }
 
@@ -159,7 +158,7 @@ function renderQueue() {
   for (const [day, cands] of [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))) {
     html += `<div class="day-head">${esc(dayHeading(day))}</div>`;
     for (const c of cands) {
-      const meta = [repoName(c.repo), `conf ${c.confidence.toFixed(2)}`, plural(c.session_ids.length, "session")].join(" · ");
+      const meta = [repoName(c.repo), plural(c.session_ids.length, "session")].join(" · ");
       html += `<div class="row ${c.id === state.selId ? "active" : ""}" data-id="${escAttr(c.id)}" tabindex="0">
         <input type="checkbox" data-sel="${escAttr(c.id)}" title="Select for merge" ${state.selection.has(c.id) ? "checked" : ""}>
         <div><div class="row-title">${esc(c.title)}</div><div class="row-meta">${esc(meta)}</div></div>
