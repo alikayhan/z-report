@@ -1,4 +1,10 @@
-# Z Report
+<p align="center">
+  <img src="design/app-icon.svg" width="132" alt="Z Report icon">
+</p>
+
+<h1 align="center">Z Report</h1>
+
+<p align="center"><em>It celebrates outcomes, not activity. No tracking, no scoring, no dashboards.</em></p>
 
 A fully local macOS app that turns Claude Code-assisted work into a private,
 evidence-backed record of achievements. It opens as a regular desktop window and
@@ -7,8 +13,6 @@ the evening Z-read in the background. Like the end-of-day Z-report a cash regist
 prints, it totals what was actually recorded and closes the books on the day: each
 evening it reconstructs accomplishments from local session transcripts and Git facts,
 then asks you to approve, edit, merge, or discard them.
-
-It celebrates outcomes, not activity. No tracking, no scoring, no dashboards.
 
 ## How it works
 
