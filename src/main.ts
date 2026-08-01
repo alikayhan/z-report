@@ -253,6 +253,12 @@ function relatedRow(c: Candidate): string {
   </div>`;
 }
 
+function confidenceCaution(conf: number): string {
+  if (conf < 0.5) return "This may not be a distinct achievement — it was pieced together from thin evidence.";
+  if (conf < 0.75) return "Z Report isn't fully sure it read this work correctly — double-check the details before approving.";
+  return "";
+}
+
 function selected(): Candidate | undefined {
   return state.pending.find((c) => c.id === state.selId);
 }
@@ -303,7 +309,7 @@ function renderReceipt() {
     return;
   }
 
-  const sub = [daySpan(c.day, c.day_end), plural(c.session_ids.length, "session"), `conf ${c.confidence.toFixed(2)}`].join(" · ");
+  const sub = [daySpan(c.day, c.day_end), plural(c.session_ids.length, "session")].join(" · ");
 
   if (editing()) {
     const outcomes = state.draftOutcomes!;
@@ -332,8 +338,9 @@ function renderReceipt() {
   const idx = state.pending.findIndex((x) => x.id === c.id);
   $("#crumb").textContent = `Card ${idx + 1} of ${state.pending.length} · ${daySpan(c.day, c.day_end)}`;
 
-  const uncertainties = c.uncertainties.length
-    ? `<div class="uncertainties">${c.uncertainties.map(esc).join("<br>")}</div>`
+  const notes = [confidenceCaution(c.confidence), ...c.uncertainties].filter(Boolean);
+  const uncertainties = notes.length
+    ? `<div class="uncertainties">${notes.map(esc).join("<br>")}</div>`
     : "";
 
   scroll.innerHTML = `<article class="receipt" id="receipt">
