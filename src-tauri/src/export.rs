@@ -1,13 +1,6 @@
 use crate::models::*;
 use std::collections::BTreeMap;
 
-fn level_label(level: u8) -> &'static str {
-    LEVEL_LABELS
-        .get(level.saturating_sub(1) as usize)
-        .copied()
-        .unwrap_or("Work observed")
-}
-
 fn fmt_day(day: &str, fmt: &str) -> String {
     chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
         .map(|d| d.format(fmt).to_string())

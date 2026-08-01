@@ -196,10 +196,10 @@ pub fn verify_outcome(
         let final_level = supported.max(1);
         if claimed > final_level {
             uncertainties.push(format!(
-                "Claim \"{}\" was stated at evidence level {} but local facts only support level {}.",
+                "Claim \"{}\" was stated as \"{}\" but local facts only support \"{}\".",
                 truncate_claim(&outcome.claim),
-                claimed,
-                final_level
+                level_label(claimed),
+                level_label(final_level)
             ));
         }
         outcome.evidence_level = final_level;
