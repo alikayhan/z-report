@@ -32,8 +32,28 @@ fn set_dock_visible(app: &AppHandle, visible: bool) {
     let _ = (app, visible);
 }
 
+// Returning from the Accessory policy makes macOS re-derive the Dock icon and
+// it usually picks a generic one; hand it the real icon explicitly.
+#[cfg(target_os = "macos")]
+fn restore_dock_icon(app: &AppHandle) {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+    let _ = app.run_on_main_thread(|| {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+        if let Some(icon) = NSImage::initWithData(NSImage::alloc(), &data) {
+            unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&icon)) };
+        }
+    });
+}
+
 fn show_window(app: &AppHandle) {
     set_dock_visible(app, true);
+    #[cfg(target_os = "macos")]
+    restore_dock_icon(app);
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
