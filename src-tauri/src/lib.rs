@@ -17,7 +17,23 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
+// With the window hidden the app is menu-bar only: no Dock icon, no Cmd-Tab entry.
+fn set_dock_visible(app: &AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::ActivationPolicy;
+        let _ = app.set_activation_policy(if visible {
+            ActivationPolicy::Regular
+        } else {
+            ActivationPolicy::Accessory
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, visible);
+}
+
 fn show_window(app: &AppHandle) {
+    set_dock_visible(app, true);
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -30,6 +46,7 @@ fn toggle_window(app: &AppHandle) {
     };
     if win.is_visible().unwrap_or(false) && win.is_focused().unwrap_or(false) {
         let _ = win.hide();
+        set_dock_visible(app, false);
     } else {
         show_window(app);
     }
@@ -100,6 +117,7 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                set_dock_visible(window.app_handle(), false);
             }
         })
         .invoke_handler(tauri::generate_handler![
