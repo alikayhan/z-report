@@ -322,7 +322,7 @@ textarea:focus-visible {
 
 .row {
   display: grid;
-  grid-template-columns: 16px 1fr auto;
+  grid-template-columns: 16px 1fr;
   align-items: start;
   gap: 9px;
   padding: 10px 18px 11px 12px;
@@ -352,28 +352,6 @@ textarea:focus-visible {
   letter-spacing: 0.06em;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-}
-
-.lvl-mini {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  padding: 2px 5px;
-  margin-top: 1px;
-  font-variant-numeric: tabular-nums;
-}
-
-.lvl-mini.l3,
-.lvl-mini.l4 {
-  color: var(--green-bright);
-  border-color: rgba(99, 185, 132, 0.35);
-}
-.lvl-mini.l5 {
-  color: var(--stamp-bright);
-  border-color: rgba(141, 135, 232, 0.4);
 }
 
 .row input[type="checkbox"] {
@@ -662,6 +640,14 @@ hr.dash {
   gap: 8px;
   padding: 3.5px 0;
   font-size: 12px;
+}
+
+.meter {
+  letter-spacing: 1.5px;
+  font-style: normal;
+}
+.meter-rest {
+  opacity: 0.28;
 }
 
 .o-mark {

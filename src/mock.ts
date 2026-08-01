@@ -27,7 +27,7 @@ const candidates: Candidate[] = [
       { claim: "Refresh race fixed in SessionStore.swift", evidence_level: 2, evidence_refs: ["file:SessionStore.swift"], verified: true },
       { claim: "Change committed to feature branch", evidence_level: 4, evidence_refs: ["commit:ab12cd3"], verified: false },
     ],
-    uncertainties: ['Claim "Change committed to feature branch" was stated at evidence level 4 but local facts only support level 2.'],
+    uncertainties: ['Claim "Change committed to feature branch" was stated as "Committed" but local facts only support "Change produced".'],
     confidence: 0.88,
     evidence_level: 3,
     session_ids: ["s1", "s2"],

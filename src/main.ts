@@ -141,8 +141,13 @@ function renderSidebar() {
 
 /* ---------- review: queue list ---------- */
 
+function meter(l: number): string {
+  const n = Math.min(Math.max(l, 1), 5);
+  return `<span class="meter" aria-hidden="true">${"●".repeat(n)}<span class="meter-rest">${"●".repeat(5 - n)}</span></span>`;
+}
+
 function levelChip(l: number): string {
-  return `<span class="level-chip l${l}">L${l} ${esc(levelLabel(l))}</span>`;
+  return `<span class="level-chip l${l}">${meter(l)} ${esc(levelLabel(l))}</span>`;
 }
 
 function renderQueue() {
@@ -162,7 +167,6 @@ function renderQueue() {
       html += `<div class="row ${c.id === state.selId ? "active" : ""}" data-id="${escAttr(c.id)}" tabindex="0">
         <input type="checkbox" data-sel="${escAttr(c.id)}" title="Select for merge" ${state.selection.has(c.id) ? "checked" : ""}>
         <div><div class="row-title">${esc(c.title)}</div><div class="row-meta">${esc(meta)}</div></div>
-        <span class="lvl-mini l${c.evidence_level}">L${c.evidence_level}</span>
       </div>`;
     }
   }
@@ -348,7 +352,7 @@ function renderReceipt() {
       <hr class="dash">
       <div class="r-total">
         <span>${plural(c.outcomes.length, "outcome")}</span>
-        <span class="sum">L${c.evidence_level} · ${esc(levelLabel(c.evidence_level))}</span>
+        <span class="sum">${meter(c.evidence_level)} ${esc(levelLabel(c.evidence_level))}</span>
       </div>
       <div class="r-code">${BARCODE}<span>${esc(sessionCodes(c.session_ids))}</span></div>
     </div>
@@ -439,7 +443,7 @@ function renderJournal() {
       <p class="r-body">${esc(e.contribution)}</p>
       ${e.outcomes.map((o) => outcomeRow(o)).join("")}
       ${prLinksRow(e.pr_links)}
-      <div class="entry-meta"><span>${esc(metaLeft)}</span><span>L${e.evidence_level} · ${esc(levelLabel(e.evidence_level))}</span></div>
+      <div class="entry-meta"><span>${esc(metaLeft)}</span><span>${meter(e.evidence_level)} ${esc(levelLabel(e.evidence_level))}</span></div>
       ${impactUi}
       <div class="entry-actions">
         ${e.evidence_level < 5 ? `<button class="key-ink" data-impact="${escAttr(e.id)}" title="Record a real-world outcome you observed">Confirm impact</button>` : ""}
@@ -900,7 +904,7 @@ async function boot() {
       state.impactForId = null;
       await loadJournal();
       renderJournal();
-      toast("Impact recorded — this entry is now at level 5");
+      toast("Impact recorded — this entry is now marked “Impact confirmed”");
       return;
     }
     const copy = target.closest<HTMLElement>("[data-copy-entry]");

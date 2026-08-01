@@ -9,6 +9,13 @@ pub const LEVEL_LABELS: [&str; 5] = [
     "Impact confirmed",
 ];
 
+pub fn level_label(level: u8) -> &'static str {
+    LEVEL_LABELS
+        .get(level.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or(LEVEL_LABELS[0])
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionFacts {
     pub session_id: String,
