@@ -1,5 +1,6 @@
+use crate::calendar;
 use crate::models::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub const RELATED_THRESHOLD: f64 = 0.20;
 const WINDOW_DAYS: f64 = crate::pipeline::EVAL_WINDOW_DAYS as f64;
@@ -12,8 +13,8 @@ const SHARED_BRANCHES: &[&str] = &["main", "master", "develop", "trunk", "HEAD"]
 
 const STOPWORDS: &[&str] = &[
     "the", "and", "for", "with", "from", "into", "that", "this", "its", "was", "were", "are",
-    "then", "than", "over", "about", "after", "before", "when", "what", "why", "how", "all",
-    "any", "not", "but", "via", "per", "out", "off", "top",
+    "then", "than", "over", "about", "after", "before", "when", "what", "why", "how", "all", "any",
+    "not", "but", "via", "per", "out", "off", "top",
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -31,9 +32,18 @@ pub struct MatchFacts {
 
 impl MatchFacts {
     pub fn build(c: &Candidate, sessions: &[SessionFacts]) -> Self {
-        let cited: Vec<&SessionFacts> = sessions
+        let sessions: HashMap<&str, &SessionFacts> = sessions
             .iter()
-            .filter(|s| c.session_ids.contains(&s.session_id))
+            .map(|session| (session.session_id.as_str(), session))
+            .collect();
+        Self::build_indexed(c, &sessions)
+    }
+
+    pub(crate) fn build_indexed(c: &Candidate, sessions: &HashMap<&str, &SessionFacts>) -> Self {
+        let cited: Vec<&SessionFacts> = c
+            .session_ids
+            .iter()
+            .filter_map(|id| sessions.get(id.as_str()).copied())
             .collect();
         Self {
             id: c.id.clone(),
@@ -62,14 +72,12 @@ fn normalize(word: &str) -> String {
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect();
-    // "safety checks" and "safety check" are the same thread.
     match w.strip_suffix('s') {
         Some(stem) if stem.len() >= 3 && !stem.ends_with('s') => stem.to_string(),
         _ => w,
     }
 }
 
-/// The repository name is dropped: every title in a repo carries it, so it separates nothing.
 fn title_tokens(m: &MatchFacts) -> HashSet<String> {
     let repo = m.repo_name().map(normalize);
     m.session_titles
@@ -85,16 +93,13 @@ fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
-    a.intersection(b).count() as f64 / a.union(b).count() as f64
-}
-
-fn parse_day(day: &str) -> Option<chrono::NaiveDate> {
-    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()
+    let shared = a.intersection(b).count();
+    shared as f64 / (a.len() + b.len() - shared) as f64
 }
 
 fn gap_days(a: &MatchFacts, b: &MatchFacts) -> Option<i64> {
-    let (a_start, a_end) = (parse_day(&a.day)?, parse_day(&a.day_end)?);
-    let (b_start, b_end) = (parse_day(&b.day)?, parse_day(&b.day_end)?);
+    let (a_start, a_end) = (calendar::parse(&a.day)?, calendar::parse(&a.day_end)?);
+    let (b_start, b_end) = (calendar::parse(&b.day)?, calendar::parse(&b.day_end)?);
     Some(if a_end < b_start {
         (b_start - a_end).num_days()
     } else if b_end < a_start {
@@ -120,8 +125,7 @@ pub fn score(a: &MatchFacts, b: &MatchFacts) -> f64 {
     let Some(gap) = gap_days(a, b) else {
         return 0.0;
     };
-    // A same-day pair is a split the evaluator made on purpose. Only titles can
-    // open a match: the earlier half is often a scoping session with no files.
+    // Titles must establish a thread before noisier file or branch overlap can strengthen it.
     let title = jaccard(&title_tokens(a), &title_tokens(b));
     if title <= 0.0 {
         return 0.0;
@@ -131,11 +135,15 @@ pub fn score(a: &MatchFacts, b: &MatchFacts) -> f64 {
         return 0.0;
     }
     let files = jaccard(&a.files, &b.files);
-    let branch = if shares_feature_branch(a, b) { 1.0 } else { 0.0 };
+    let branch = if shares_feature_branch(a, b) {
+        1.0
+    } else {
+        0.0
+    };
     (TITLE_WEIGHT * title + FILE_WEIGHT * files + BRANCH_WEIGHT * branch) * decay
 }
 
-/// Keyed on sessions rather than candidate ids, so a dismissal survives re-evaluation.
+// Session-based keys keep dismissals stable when evaluation replaces candidate IDs.
 pub fn pair_key(a: &[String], b: &[String]) -> String {
     let norm = |ids: &[String]| {
         let mut v: Vec<&str> = ids.iter().map(String::as_str).collect();
@@ -151,8 +159,10 @@ pub fn pair_key(a: &[String], b: &[String]) -> String {
     }
 }
 
-/// Only earlier work qualifies, so a pair is suggested once — on the card that continues it.
-pub fn best_match<'a>(subject: &MatchFacts, others: &'a [MatchFacts]) -> Option<(&'a MatchFacts, f64)> {
+pub fn best_match<'a>(
+    subject: &MatchFacts,
+    others: &'a [MatchFacts],
+) -> Option<(&'a MatchFacts, f64)> {
     others
         .iter()
         .filter(|o| o.id != subject.id && o.day < subject.day)
@@ -206,7 +216,10 @@ mod tests {
 
     #[test]
     fn scoring_is_symmetric() {
-        assert_eq!(score(&scoping(), &building()), score(&building(), &scoping()));
+        assert_eq!(
+            score(&scoping(), &building()),
+            score(&building(), &scoping())
+        );
     }
 
     #[test]
@@ -222,9 +235,21 @@ mod tests {
 
     #[test]
     fn file_overlap_alone_never_suggests_a_merge() {
-        let mut rename = side("d", "2026-07-18", "/r/inferometer", &["Explain project in simple terms"]);
-        let mut mock = side("e", "2026-07-19", "/r/inferometer", &["Design Inferometer mock with agent split"]);
-        let shared: HashSet<String> = (0..20).map(|i| format!("/r/inferometer/src/{i}.ts")).collect();
+        let mut rename = side(
+            "d",
+            "2026-07-18",
+            "/r/inferometer",
+            &["Explain project in simple terms"],
+        );
+        let mut mock = side(
+            "e",
+            "2026-07-19",
+            "/r/inferometer",
+            &["Design Inferometer mock with agent split"],
+        );
+        let shared: HashSet<String> = (0..20)
+            .map(|i| format!("/r/inferometer/src/{i}.ts"))
+            .collect();
         rename.files = shared.clone();
         mock.files = shared;
         assert_eq!(score(&rename, &mock), 0.0);
@@ -275,7 +300,12 @@ mod tests {
     #[test]
     fn best_match_picks_the_strongest_earlier_partner() {
         let others = vec![
-            side("c", "2026-07-19", "/Users/x/Desktop/gymondo/synapse", &["Add analytics to plugin usage tracking"]),
+            side(
+                "c",
+                "2026-07-19",
+                "/Users/x/Desktop/gymondo/synapse",
+                &["Add analytics to plugin usage tracking"],
+            ),
             scoping(),
         ];
         let (winner, _) = best_match(&building(), &others).unwrap();

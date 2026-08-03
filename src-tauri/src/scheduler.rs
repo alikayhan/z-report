@@ -2,7 +2,6 @@ use crate::pipeline::{self, AppState};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-/// Background loop: periodic collection scans plus the once-daily Z-read.
 pub fn spawn(app: AppHandle) {
     std::thread::spawn(move || loop {
         tick(&app);
@@ -37,8 +36,7 @@ fn tick(app: &AppHandle) {
     if last_zread_day.as_deref() == Some(today.as_str()) {
         return;
     }
-    // First launch: start the ledger today, close the books tomorrow.
-    // Prevents a surprise evaluation (and model spend) minutes after install.
+    // Seed today so first launch cannot trigger immediate model usage.
     if last_zread_day.is_none() {
         let store = state.store.lock().unwrap();
         let _ = store.kv_set("last_zread_day", &today);

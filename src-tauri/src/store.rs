@@ -1,6 +1,7 @@
 use crate::models::*;
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub struct Store {
@@ -13,7 +14,6 @@ pub fn data_dir() -> PathBuf {
         .join("com.zreport.app")
 }
 
-/// SQLite cannot parameterize identifiers, so callers must pass literals.
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
     let exists: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
@@ -21,7 +21,10 @@ fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &st
         |r| r.get(0),
     )?;
     if !exists {
-        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
     }
     Ok(())
 }
@@ -98,13 +101,27 @@ impl Store {
                value TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_candidates_day ON candidates(day);
-             CREATE INDEX IF NOT EXISTS idx_journal_day ON journal(day);",
+             CREATE INDEX IF NOT EXISTS idx_journal_day ON journal(day);
+             CREATE INDEX IF NOT EXISTS idx_sessions_day ON sessions(day);",
         )?;
         for table in ["candidates", "journal"] {
             add_column_if_missing(&conn, table, "pr_links", "TEXT NOT NULL DEFAULT '[]'")?;
             add_column_if_missing(&conn, table, "day_end", "TEXT")?;
         }
         add_column_if_missing(&conn, "candidates", "related", "TEXT")?;
+        let candidate_index_columns: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('candidates')
+             WHERE name IN ('status', 'day', 'created_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if candidate_index_columns == 3 {
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_candidates_status_day_created
+                 ON candidates(status, day DESC, created_at DESC)",
+                [],
+            )?;
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS dismissed_links (
                pair_key TEXT PRIMARY KEY,
@@ -151,7 +168,18 @@ impl Store {
             .ok()
     }
 
-    pub fn upsert_session(&self, facts: &SessionFacts, day: &str, content_hash: &str) -> Result<()> {
+    pub fn session_content_hashes(&self) -> Result<HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT id, content_hash FROM sessions")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    pub fn upsert_session(
+        &self,
+        facts: &SessionFacts,
+        day: &str,
+        content_hash: &str,
+    ) -> Result<()> {
         self.upsert_session_json(facts, day, content_hash, &serde_json::to_string(facts)?)
     }
 
@@ -181,8 +209,6 @@ impl Store {
         Ok(())
     }
 
-    /// A transcript is re-read whenever its size or mtime moves — a resume or a
-    /// plain touch — so re-parsing identical facts must not re-queue the session.
     pub fn upsert_session_if_changed(
         &self,
         facts: &SessionFacts,
@@ -199,8 +225,7 @@ impl Store {
             )
             .ok();
         if prior.as_deref() == Some(json.as_str()) {
-            // SQLite evaluates the CASE against pre-update values, so this
-            // advances evaluated_hash only for sessions that were not pending.
+            // CASE compares pre-update hashes so metadata-only changes preserve queue state.
             self.conn.execute(
                 "UPDATE sessions SET content_hash=?2, updated_at=?3,
                    evaluated_hash=CASE WHEN evaluated_hash=content_hash THEN ?2 ELSE evaluated_hash END
@@ -218,17 +243,22 @@ impl Store {
     }
 
     pub fn mark_sessions_evaluated(&self, ids: &[String]) -> Result<()> {
-        for id in ids {
-            self.conn.execute(
-                "UPDATE sessions SET evaluated_hash=content_hash WHERE id=?1",
-                params![id],
-            )?;
+        if ids.is_empty() {
+            return Ok(());
         }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql =
+            format!("UPDATE sessions SET evaluated_hash=content_hash WHERE id IN ({placeholders})");
+        self.conn
+            .execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
         Ok(())
     }
 
-    /// Sessions whose content changed since last evaluation, grouped by day.
-    pub fn pending_sessions(&self, up_to_day: &str, min_day: &str) -> Result<Vec<(String, SessionFacts)>> {
+    pub fn pending_sessions(
+        &self,
+        up_to_day: &str,
+        min_day: &str,
+    ) -> Result<Vec<(String, SessionFacts)>> {
         let mut stmt = self.conn.prepare(
             "SELECT day, facts FROM sessions
              WHERE content_hash != evaluated_hash AND day <= ?1 AND day >= ?2
@@ -333,7 +363,12 @@ impl Store {
         Ok(())
     }
 
-    pub fn set_candidate_status(&self, id: &str, status: &str, merged_into: Option<&str>) -> Result<()> {
+    pub fn set_candidate_status(
+        &self,
+        id: &str,
+        status: &str,
+        merged_into: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE candidates SET status=?2, merged_into=?3 WHERE id=?1",
             params![id, status, merged_into],
@@ -426,8 +461,12 @@ impl Store {
         Ok(())
     }
 
-    pub fn journal_range(&self, from: &str, to: &str, query: Option<&str>) -> Result<Vec<JournalEntry>> {
-        // Match on overlap so a spanning entry survives a range that clips either end.
+    pub fn journal_range(
+        &self,
+        from: &str,
+        to: &str,
+        query: Option<&str>,
+    ) -> Result<Vec<JournalEntry>> {
         let mut sql = String::from(
             "SELECT id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited
              FROM journal WHERE day<=?2 AND coalesce(day_end,day)>=?1",
@@ -535,19 +574,16 @@ impl Store {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    pub fn counts(&self) -> Result<(i64, i64, i64)> {
+    pub fn overview_counts(&self) -> Result<(i64, i64)> {
         let pending: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM candidates WHERE status='pending'",
             [],
             |r| r.get(0),
         )?;
-        let journal: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM journal", [], |r| r.get(0))?;
         let sessions: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
-        Ok((pending, journal, sessions))
+        Ok((pending, sessions))
     }
 
     pub fn prune_candidates_older_than(&self, min_day: &str) -> Result<()> {
@@ -558,7 +594,7 @@ impl Store {
         Ok(())
     }
 
-    /// Only safe because `scan` skips these transcripts before parsing; else they churn.
+    // Call only with the same horizon skipped by scanning, or old transcripts will churn.
     pub fn prune_sessions_older_than(&self, min_day: &str) -> Result<usize> {
         Ok(self
             .conn
@@ -566,7 +602,7 @@ impl Store {
     }
 
     pub fn delete_sessions_missing_from(&self, live_ids: &[String]) -> Result<usize> {
-        // Empty means discovery failed, not that every transcript vanished.
+        // Empty discovery is ambiguous and must never erase all stored evidence.
         if live_ids.is_empty() {
             return Ok(0);
         }
@@ -711,27 +747,45 @@ mod tests {
             approved_at: "2026-07-20T18:00:00+02:00".into(),
             edited: false,
         };
-        store.insert_journal(&entry("spans", "2026-07-19", Some("2026-07-20"))).unwrap();
-        store.insert_journal(&entry("single", "2026-07-17", None)).unwrap();
+        store
+            .insert_journal(&entry("spans", "2026-07-19", Some("2026-07-20")))
+            .unwrap();
+        store
+            .insert_journal(&entry("single", "2026-07-17", None))
+            .unwrap();
 
         let ids = |from: &str, to: &str| -> Vec<String> {
-            store.journal_range(from, to, None).unwrap().into_iter().map(|e| e.id).collect()
+            store
+                .journal_range(from, to, None)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.id)
+                .collect()
         };
-        assert_eq!(ids("2026-07-20", "2026-07-26"), vec!["spans"], "clipped at the start");
-        assert_eq!(ids("2026-07-13", "2026-07-19"), vec!["spans", "single"], "clipped at the end");
+        assert_eq!(
+            ids("2026-07-20", "2026-07-26"),
+            vec!["spans"],
+            "clipped at the start"
+        );
+        assert_eq!(
+            ids("2026-07-13", "2026-07-19"),
+            vec!["spans", "single"],
+            "clipped at the end"
+        );
         assert!(ids("2026-07-21", "2026-07-26").is_empty());
     }
 
     #[test]
     fn related_links_round_trip_and_clear() {
         let store = Store::open(":memory:").unwrap();
-        store.insert_candidate(&candidate("c1", "2026-07-20", "pending")).unwrap();
+        store
+            .insert_candidate(&candidate("c1", "2026-07-20", "pending"))
+            .unwrap();
         let link = RelatedLink {
-            kind: "continuation".into(),
+            kind: RelatedKind::Continuation,
             target_id: "c0".into(),
             target_day: "2026-07-19".into(),
             target_title: "Earlier half".into(),
-            score: 0.32,
             pair_key: "s-a~s-b".into(),
         };
 
@@ -805,19 +859,30 @@ mod tests {
     #[test]
     fn touching_a_transcript_does_not_re_queue_evaluated_work() {
         let store = Store::open(":memory:").unwrap();
-        let window = || store.pending_sessions("2026-07-31", "2026-07-01").unwrap().len();
+        let window = || {
+            store
+                .pending_sessions("2026-07-31", "2026-07-01")
+                .unwrap()
+                .len()
+        };
         let facts = session("s1");
 
-        assert!(store.upsert_session_if_changed(&facts, "2026-07-20", "100:1").unwrap());
+        assert!(store
+            .upsert_session_if_changed(&facts, "2026-07-20", "100:1")
+            .unwrap());
         store.mark_sessions_evaluated(&["s1".to_string()]).unwrap();
         assert_eq!(window(), 0);
 
-        assert!(!store.upsert_session_if_changed(&facts, "2026-07-20", "100:2").unwrap());
+        assert!(!store
+            .upsert_session_if_changed(&facts, "2026-07-20", "100:2")
+            .unwrap());
         assert_eq!(window(), 0, "an mtime bump alone must not re-queue");
 
         let mut resumed = facts.clone();
         resumed.prompts.push("and one more thing".into());
-        assert!(store.upsert_session_if_changed(&resumed, "2026-07-20", "200:3").unwrap());
+        assert!(store
+            .upsert_session_if_changed(&resumed, "2026-07-20", "200:3")
+            .unwrap());
         assert_eq!(window(), 1, "genuinely new work must re-queue");
     }
 
@@ -825,9 +890,13 @@ mod tests {
     fn touching_an_unevaluated_transcript_leaves_it_queued() {
         let store = Store::open(":memory:").unwrap();
         let facts = session("s1");
-        store.upsert_session_if_changed(&facts, "2026-07-20", "100:1").unwrap();
+        store
+            .upsert_session_if_changed(&facts, "2026-07-20", "100:1")
+            .unwrap();
 
-        assert!(!store.upsert_session_if_changed(&facts, "2026-07-20", "100:2").unwrap());
+        assert!(!store
+            .upsert_session_if_changed(&facts, "2026-07-20", "100:2")
+            .unwrap());
 
         let pending = store.pending_sessions("2026-07-31", "2026-07-01").unwrap();
         assert_eq!(pending.len(), 1, "never evaluated, so it stays pending");
@@ -836,8 +905,12 @@ mod tests {
     #[test]
     fn evidence_horizon_prunes_stale_sessions() {
         let store = Store::open(":memory:").unwrap();
-        store.upsert_session(&session("old"), "2026-01-01", "h").unwrap();
-        store.upsert_session(&session("recent"), "2026-07-20", "h").unwrap();
+        store
+            .upsert_session(&session("old"), "2026-01-01", "h")
+            .unwrap();
+        store
+            .upsert_session(&session("recent"), "2026-07-20", "h")
+            .unwrap();
 
         assert_eq!(store.prune_sessions_older_than("2026-04-01").unwrap(), 1);
         assert!(store.session_hash("old").is_none());
@@ -847,8 +920,12 @@ mod tests {
     #[test]
     fn orphan_cleanup_spares_everything_when_discovery_returns_nothing() {
         let store = Store::open(":memory:").unwrap();
-        store.upsert_session(&session("live"), "2026-07-20", "h").unwrap();
-        store.upsert_session(&session("orphan"), "2026-07-21", "h").unwrap();
+        store
+            .upsert_session(&session("live"), "2026-07-20", "h")
+            .unwrap();
+        store
+            .upsert_session(&session("orphan"), "2026-07-21", "h")
+            .unwrap();
 
         assert_eq!(store.delete_sessions_missing_from(&[]).unwrap(), 0);
         assert!(store.session_hash("live").is_some());

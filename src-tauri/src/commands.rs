@@ -14,11 +14,9 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 #[derive(Serialize)]
 pub struct Overview {
     pub pending: i64,
-    pub journal_count: i64,
     pub session_count: i64,
     pub evaluating: bool,
     pub last_scan_at: Option<String>,
-    pub last_zread_day: Option<String>,
     pub zread_time: String,
     pub today: String,
     pub model: String,
@@ -26,37 +24,40 @@ pub struct Overview {
     pub metered: bool,
 }
 
+#[derive(Serialize)]
+pub struct ExportData {
+    pub markdown: String,
+    pub entries: Vec<JournalEntry>,
+}
+
 #[tauri::command]
 pub fn overview(state: State<AppState>) -> CmdResult<Overview> {
-    let store = state.store.lock().unwrap();
-    let (pending, journal_count, session_count) = store.counts().map_err(err)?;
-    let settings = store.settings();
+    let (pending, session_count, settings, last_scan_at) = {
+        let store = state.store.lock().unwrap();
+        let (pending, session_count) = store.overview_counts().map_err(err)?;
+        (
+            pending,
+            session_count,
+            store.settings(),
+            store.kv_get("last_scan_at"),
+        )
+    };
     Ok(Overview {
         pending,
-        journal_count,
         session_count,
         evaluating: state.evaluating.load(Ordering::SeqCst),
-        last_scan_at: store.kv_get("last_scan_at"),
-        last_zread_day: store.kv_get("last_zread_day"),
-        zread_time: settings.zread_time.clone(),
+        last_scan_at,
+        zread_time: settings.zread_time,
         today: pipeline::today(),
         model: evaluator::EVAL_MODEL.into(),
-        claude_found: evaluator::find_claude(&settings).is_ok(),
+        claude_found: state.claude_found.load(Ordering::SeqCst),
         metered: (*state.metered.lock().unwrap()).unwrap_or(false),
     })
 }
 
 #[tauri::command]
-pub fn scan_now(app: AppHandle) -> CmdResult<u32> {
-    pipeline::scan(&app).map_err(err)
-}
-
-#[tauri::command]
-pub fn run_xread(app: AppHandle) -> CmdResult<()> {
-    std::thread::spawn(move || {
-        let _ = pipeline::evaluate_pending(&app, "xread");
-    });
-    Ok(())
+pub fn run_xread(app: AppHandle) {
+    pipeline::spawn_evaluation(app, "xread");
 }
 
 #[tauri::command]
@@ -85,7 +86,6 @@ pub fn update_candidate(
     Ok(())
 }
 
-/// Suggestions point at other pending cards, so any status change can strand one.
 fn relink(store: &store::Store) {
     let _ = pipeline::link_related(store);
 }
@@ -94,21 +94,7 @@ fn relink(store: &store::Store) {
 pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> CmdResult<()> {
     let store = state.store.lock().unwrap();
     let c = store.candidate(&id).map_err(err)?;
-    let entry = JournalEntry {
-        id: format!("j-{}", c.id),
-        day: c.day.clone(),
-        day_end: c.day_end.clone(),
-        title: c.title.clone(),
-        contribution: c.contribution.clone(),
-        outcomes: c.outcomes.clone(),
-        evidence_level: c.evidence_level,
-        session_ids: c.session_ids.clone(),
-        pr_links: c.pr_links.clone(),
-        repo: c.repo.clone(),
-        model: c.model.clone(),
-        approved_at: chrono::Local::now().to_rfc3339(),
-        edited,
-    };
+    let entry = JournalEntry::from_candidate(&c, chrono::Local::now().to_rfc3339(), edited);
     store.insert_journal(&entry).map_err(err)?;
     store
         .set_candidate_status(&id, "approved", None)
@@ -117,37 +103,39 @@ pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> Cm
     Ok(())
 }
 
-#[tauri::command]
-pub fn discard_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
+fn transition_candidate(state: &AppState, id: &str, status: &str) -> CmdResult<()> {
     let store = state.store.lock().unwrap();
-    store
-        .set_candidate_status(&id, "discarded", None)
-        .map_err(err)?;
+    store.set_candidate_status(id, status, None).map_err(err)?;
     relink(&store);
     Ok(())
+}
+
+#[tauri::command]
+pub fn discard_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
+    transition_candidate(&state, &id, "discarded")
 }
 
 #[tauri::command]
 pub fn restore_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
-    let store = state.store.lock().unwrap();
-    store
-        .set_candidate_status(&id, "pending", None)
-        .map_err(err)?;
-    relink(&store);
-    Ok(())
+    transition_candidate(&state, &id, "pending")
 }
 
 #[tauri::command]
-pub fn merge_candidates(app: AppHandle, state: State<AppState>, ids: Vec<String>) -> CmdResult<String> {
+pub fn merge_candidates(
+    app: AppHandle,
+    state: State<AppState>,
+    ids: Vec<String>,
+) -> CmdResult<String> {
     if ids.len() < 2 {
         return Err("select at least two candidates to merge".into());
     }
     let (new, parts) = {
         let store = state.store.lock().unwrap();
-        let mut merged: Vec<Candidate> = Vec::new();
-        for id in &ids {
-            merged.push(store.candidate(id).map_err(err)?);
-        }
+        let merged: Vec<Candidate> = ids
+            .iter()
+            .map(|id| store.candidate(id))
+            .collect::<Result<_, _>>()
+            .map_err(err)?;
         if merged.iter().any(|c| c.status != "pending") {
             return Err("only cards still in the review queue can be merged".into());
         }
@@ -177,7 +165,7 @@ pub fn dismiss_related(state: State<AppState>, id: String) -> CmdResult<()> {
     let Some(link) = &c.related else {
         return Ok(());
     };
-    // Links stored before pair_key existed deserialize empty; the next relink rewrites them.
+    // Legacy links without a pair key cannot persist a dismissal safely.
     if !link.pair_key.is_empty() {
         store.dismiss_link(&link.pair_key).map_err(err)?;
     }
@@ -223,14 +211,17 @@ pub fn delete_journal_entry(state: State<AppState>, id: String) -> CmdResult<()>
 }
 
 #[tauri::command]
-pub fn export_markdown(state: State<AppState>, from: String, to: String) -> CmdResult<String> {
+pub fn export_data(state: State<AppState>, from: String, to: String) -> CmdResult<ExportData> {
     let entries = state
         .store
         .lock()
         .unwrap()
         .journal_range(&from, &to, None)
         .map_err(err)?;
-    Ok(export::to_markdown(&entries, &from, &to))
+    Ok(ExportData {
+        markdown: export::to_markdown(&entries, &from, &to),
+        entries,
+    })
 }
 
 #[tauri::command]
@@ -239,23 +230,34 @@ pub fn write_file(path: String, content: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn get_settings(state: State<AppState>) -> CmdResult<Settings> {
-    Ok(state.store.lock().unwrap().settings())
+pub fn get_settings(state: State<AppState>) -> Settings {
+    state.store.lock().unwrap().settings()
 }
 
 #[tauri::command]
 pub fn set_settings(state: State<AppState>, settings: Settings) -> CmdResult<()> {
-    state
-        .store
-        .lock()
-        .unwrap()
-        .save_settings(&settings)
-        .map_err(err)
+    let path_changed = {
+        let store = state.store.lock().unwrap();
+        let path_changed = store.settings().claude_path != settings.claude_path;
+        store.save_settings(&settings).map_err(err)?;
+        path_changed
+    };
+    if path_changed {
+        let (found, metered) = evaluator::probe_status(&settings);
+        state.claude_found.store(found, Ordering::SeqCst);
+        *state.metered.lock().unwrap() = Some(metered);
+    }
+    Ok(())
 }
 
 #[tauri::command]
 pub fn eval_runs(state: State<AppState>) -> CmdResult<Vec<EvalRun>> {
-    state.store.lock().unwrap().recent_eval_runs(20).map_err(err)
+    state
+        .store
+        .lock()
+        .unwrap()
+        .recent_eval_runs(20)
+        .map_err(err)
 }
 
 #[tauri::command]

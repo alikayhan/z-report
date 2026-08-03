@@ -1,13 +1,15 @@
+mod calendar;
 mod commands;
 pub mod evaluator;
 pub mod export;
 pub mod gitfacts;
 pub mod ingest;
 pub mod models;
-mod pipeline;
+pub mod pipeline;
 pub mod related;
 mod scheduler;
 pub mod store;
+mod text;
 
 use pipeline::AppState;
 use std::sync::atomic::AtomicBool;
@@ -17,7 +19,6 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
-// With the window hidden the app is menu-bar only: no Dock icon, no Cmd-Tab entry.
 fn set_dock_visible(app: &AppHandle, visible: bool) {
     #[cfg(target_os = "macos")]
     {
@@ -82,14 +83,18 @@ pub fn run() {
             app.manage(AppState {
                 store: Mutex::new(store),
                 evaluating: AtomicBool::new(false),
+                claude_found: AtomicBool::new(false),
                 metered: Mutex::new(None),
             });
 
-            // Probe billing mode off-thread so launch never blocks on the CLI.
             let detect = app.handle().clone();
             std::thread::spawn(move || {
                 let settings = detect.state::<AppState>().store.lock().unwrap().settings();
-                let metered = evaluator::is_metered(&settings);
+                let (found, metered) = evaluator::probe_status(&settings);
+                detect
+                    .state::<AppState>()
+                    .claude_found
+                    .store(found, std::sync::atomic::Ordering::SeqCst);
                 *detect.state::<AppState>().metered.lock().unwrap() = Some(metered);
                 let _ = detect.emit("zr:refresh", ());
             });
@@ -109,10 +114,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_window(app),
                     "xread" => {
-                        let handle = app.clone();
-                        std::thread::spawn(move || {
-                            let _ = pipeline::evaluate_pending(&handle, "xread");
-                        });
+                        pipeline::spawn_evaluation(app.clone(), "xread");
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -132,7 +134,6 @@ pub fn run() {
             scheduler::spawn(app.handle().clone());
             Ok(())
         })
-        // Closing the window keeps the app alive in the menu bar.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -142,7 +143,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::overview,
-            commands::scan_now,
             commands::run_xread,
             commands::candidates,
             commands::update_candidate,
@@ -154,7 +154,7 @@ pub fn run() {
             commands::journal,
             commands::confirm_impact,
             commands::delete_journal_entry,
-            commands::export_markdown,
+            commands::export_data,
             commands::write_file,
             commands::get_settings,
             commands::set_settings,

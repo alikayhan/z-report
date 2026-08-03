@@ -1,8 +1,8 @@
 use crate::models::*;
 use crate::store::Store;
-use crate::{evaluator, gitfacts, ingest, related};
+use crate::{calendar, evaluator, gitfacts, ingest, related};
 use anyhow::Result;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -15,7 +15,7 @@ const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 pub struct AppState {
     pub store: Mutex<Store>,
     pub evaluating: AtomicBool,
-    /// None until the startup billing-mode probe finishes; see evaluator::is_metered.
+    pub claude_found: AtomicBool,
     pub metered: Mutex<Option<bool>>,
 }
 
@@ -23,25 +23,13 @@ pub fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-fn day_offset(day: &str, days: i64) -> String {
-    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| (d + chrono::Duration::days(days)).format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|_| day.to_string())
-}
-
-/// Discover transcripts, parse changed ones, correlate with Git, upsert facts.
 pub fn scan(app: &AppHandle) -> Result<u32> {
     let state = app.state::<AppState>();
     let files = ingest::discover();
     let live_ids: Vec<String> = files.iter().map(|f| f.session_id.clone()).collect();
-    let (settings, known): (Settings, Vec<(String, Option<(String, String)>)>) = {
+    let (settings, known) = {
         let store = state.store.lock().unwrap();
-        let settings = store.settings();
-        let known = files
-            .iter()
-            .map(|f| (f.session_id.clone(), store.session_hash(&f.session_id)))
-            .collect();
-        (settings, known)
+        (store.settings(), store.session_content_hashes()?)
     };
 
     let stale_before = chrono::Local::now().timestamp() - EVIDENCE_HORIZON_DAYS * 86_400;
@@ -51,11 +39,7 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
         if (file.mtime as i64) < stale_before {
             continue;
         }
-        let prior = known
-            .iter()
-            .find(|(id, _)| *id == file.session_id)
-            .and_then(|(_, h)| h.clone());
-        if prior.as_ref().map(|(content, _)| content.as_str()) == Some(file.content_hash.as_str()) {
+        if known.get(&file.session_id).map(String::as_str) == Some(file.content_hash.as_str()) {
             continue;
         }
         let Ok(mut facts) =
@@ -81,11 +65,13 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
     {
         let store = state.store.lock().unwrap();
         if settings.retention_days > 0 {
-            let min_day = day_offset(&today(), -(settings.retention_days as i64));
+            let min_day = calendar::offset(&today(), -(settings.retention_days as i64));
             store.prune_candidates_older_than(&min_day)?;
         }
-        let evidence_min_day =
-            day_offset(&today(), -(EVIDENCE_HORIZON_DAYS + EVIDENCE_PRUNE_SLACK_DAYS));
+        let evidence_min_day = calendar::offset(
+            &today(),
+            -(EVIDENCE_HORIZON_DAYS + EVIDENCE_PRUNE_SLACK_DAYS),
+        );
         removed = store.prune_sessions_older_than(&evidence_min_day)?
             + store.delete_sessions_missing_from(&live_ids)?;
         store.kv_set("last_scan_at", &chrono::Local::now().to_rfc3339())?;
@@ -96,8 +82,6 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
     Ok(updated)
 }
 
-/// Run the Z-read/X-read: evaluate all sessions whose content changed since
-/// their last evaluation, one evaluator run per day, then queue candidates.
 pub fn evaluate_pending(app: &AppHandle, kind: &str) -> Result<usize> {
     let state = app.state::<AppState>();
     if state
@@ -115,8 +99,16 @@ pub fn evaluate_pending(app: &AppHandle, kind: &str) -> Result<usize> {
 
     match &result {
         Ok(count) if *count > 0 => {
-            let noun = if *count == 1 { "achievement" } else { "achievements" };
-            let title = if kind == "zread" { "Today's Z-read is ready" } else { "X-read complete" };
+            let noun = if *count == 1 {
+                "achievement"
+            } else {
+                "achievements"
+            };
+            let title = if kind == "zread" {
+                "Today's Z-read is ready"
+            } else {
+                "X-read complete"
+            };
             let _ = app
                 .notification()
                 .builder()
@@ -137,13 +129,19 @@ pub fn evaluate_pending(app: &AppHandle, kind: &str) -> Result<usize> {
     result
 }
 
+pub fn spawn_evaluation(app: AppHandle, kind: &'static str) {
+    std::thread::spawn(move || {
+        let _ = evaluate_pending(&app, kind);
+    });
+}
+
 fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
     scan(app)?;
     let state = app.state::<AppState>();
     let (settings, pending) = {
         let store = state.store.lock().unwrap();
         let today = today();
-        let min_day = day_offset(&today, -(EVAL_WINDOW_DAYS - 1));
+        let min_day = calendar::offset(&today, -(EVAL_WINDOW_DAYS - 1));
         (store.settings(), store.pending_sessions(&today, &min_day)?)
     };
 
@@ -180,7 +178,7 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
             duration_ms: None,
             session_count: substantial.len() as i64,
             candidate_count: 0,
-        error: None,
+            error: None,
         };
         {
             let store = state.store.lock().unwrap();
@@ -189,7 +187,12 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
 
         match evaluator::evaluate_day(&settings, &day, &substantial) {
             Ok(result) => {
-                let candidates = build_candidates(&day, &substantial, result.achievements, result.model.clone());
+                let candidates = build_candidates(
+                    &day,
+                    &substantial,
+                    result.achievements,
+                    result.model.clone(),
+                );
                 let store = state.store.lock().unwrap();
                 store.delete_pending_for_sessions(&day, &all_ids)?;
                 for c in &candidates {
@@ -226,32 +229,29 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str) -> Result<usize> {
 pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
     let lead = parts
         .iter()
-        .min_by(|a, b| b.evidence_level.cmp(&a.evidence_level).then(a.day.cmp(&b.day)))
+        .min_by(|a, b| {
+            b.evidence_level
+                .cmp(&a.evidence_level)
+                .then(a.day.cmp(&b.day))
+        })
         .expect("merge needs at least one candidate");
     let ordered = {
         let mut v: Vec<&Candidate> = parts.iter().collect();
         v.sort_by(|a, b| a.day.cmp(&b.day).then(a.created_at.cmp(&b.created_at)));
         v
     };
-    let mut outcomes: Vec<Outcome> = Vec::new();
-    for o in ordered.iter().flat_map(|c| &c.outcomes) {
-        let key = o.claim.trim().to_lowercase();
-        if !outcomes.iter().any(|k| k.claim.trim().to_lowercase() == key) {
-            outcomes.push(o.clone());
-        }
-    }
-    let mut uncertainties: Vec<String> = Vec::new();
-    for u in ordered.iter().flat_map(|c| &c.uncertainties) {
-        if !uncertainties.iter().any(|k| k.trim() == u.trim()) {
-            uncertainties.push(u.clone());
-        }
-    }
-    let mut session_ids: Vec<String> = Vec::new();
-    for s in ordered.iter().flat_map(|c| &c.session_ids) {
-        if !session_ids.contains(s) {
-            session_ids.push(s.clone());
-        }
-    }
+    let outcomes = unique_by(
+        ordered.iter().flat_map(|c| c.outcomes.iter().cloned()),
+        |outcome| outcome.claim.trim().to_lowercase(),
+    );
+    let uncertainties = unique_by(
+        ordered.iter().flat_map(|c| c.uncertainties.iter().cloned()),
+        |uncertainty| uncertainty.trim().to_owned(),
+    );
+    let session_ids = unique_by(
+        ordered.iter().flat_map(|c| c.session_ids.iter().cloned()),
+        Clone::clone,
+    );
     let day = ordered[0].day.clone();
     let day_end = ordered
         .iter()
@@ -283,19 +283,21 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
     }
 }
 
-/// At most one suggestion per pending card; a journaled twin wins over an earlier card.
 pub fn link_related(store: &Store) -> Result<()> {
     let dismissed = store.dismissed_links()?;
     let pending = store.candidates_by_status("pending")?;
-    let journal = store.journal_since(&day_offset(&today(), -EVAL_WINDOW_DAYS))?;
-    let cited: Vec<String> = pending
-        .iter()
-        .flat_map(|c| c.session_ids.iter().cloned())
-        .collect();
+    let journal = store.journal_since(&calendar::offset(&today(), -EVAL_WINDOW_DAYS))?;
+    let cited = unique_by(
+        pending
+            .iter()
+            .flat_map(|candidate| candidate.session_ids.iter().cloned()),
+        Clone::clone,
+    );
     let sessions = store.sessions_by_ids(&cited)?;
+    let sessions_by_id = session_index(&sessions);
     let sides: Vec<related::MatchFacts> = pending
         .iter()
-        .map(|c| related::MatchFacts::build(c, &sessions))
+        .map(|candidate| related::MatchFacts::build_indexed(candidate, &sessions_by_id))
         .collect();
 
     for (i, c) in pending.iter().enumerate() {
@@ -303,21 +305,19 @@ pub fn link_related(store: &Store) -> Result<()> {
             .iter()
             .find(|e| e.session_ids.iter().any(|s| c.session_ids.contains(s)))
             .map(|e| RelatedLink {
-                kind: "journaled".into(),
+                kind: RelatedKind::Journaled,
                 target_id: e.id.clone(),
                 target_title: e.title.clone(),
                 target_day: e.day.clone(),
-                score: 1.0,
                 pair_key: related::pair_key(&c.session_ids, &e.session_ids),
             });
         let link = journaled
             .or_else(|| {
-                related::best_match(&sides[i], &sides).map(|(m, score)| RelatedLink {
-                    kind: "continuation".into(),
+                related::best_match(&sides[i], &sides).map(|(m, _)| RelatedLink {
+                    kind: RelatedKind::Continuation,
                     target_id: m.id.clone(),
                     target_title: m.title.clone(),
                     target_day: m.day.clone(),
-                    score: (score * 100.0).round() / 100.0,
                     pair_key: related::pair_key(&c.session_ids, &m.session_ids),
                 })
             })
@@ -330,9 +330,12 @@ pub fn link_related(store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// The stitched card is already usable, so a failed rewrite just leaves it; the
-/// guard keeps a slow rewrite from clobbering an edit or a status change.
-pub fn rewrite_merged_in_background(app: AppHandle, stitched: Candidate, parts: Vec<(String, String)>) {
+// Prevent a slow rewrite from clobbering a user edit or status change.
+pub fn rewrite_merged_in_background(
+    app: AppHandle,
+    stitched: Candidate,
+    parts: Vec<(String, String)>,
+) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
         let settings = state.store.lock().unwrap().settings();
@@ -350,7 +353,12 @@ pub fn rewrite_merged_in_background(app: AppHandle, stitched: Candidate, parts: 
             {
                 return;
             }
-            let _ = store.update_candidate_fields(&stitched.id, &title, &contribution, &current.outcomes);
+            let _ = store.update_candidate_fields(
+                &stitched.id,
+                &title,
+                &contribution,
+                &current.outcomes,
+            );
             let _ = link_related(&store);
         }
         let _ = app.emit("zr:refresh", ());
@@ -360,14 +368,67 @@ pub fn rewrite_merged_in_background(app: AppHandle, stitched: Candidate, parts: 
 fn ref_session_id(r: &str) -> Option<&str> {
     if let Some(rest) = r.strip_prefix("session:") {
         Some(rest)
-    } else if let Some(rest) = r
-        .strip_prefix("cmd:")
-        .or_else(|| r.strip_prefix("action:"))
-    {
+    } else if let Some(rest) = r.strip_prefix("cmd:").or_else(|| r.strip_prefix("action:")) {
         rest.rsplit_once(':').map(|(sid, _)| sid)
     } else {
         None
     }
+}
+
+fn session_index(sessions: &[SessionFacts]) -> HashMap<&str, &SessionFacts> {
+    sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect()
+}
+
+fn prepare_achievement(
+    mut achievement: Achievement,
+    sessions: &HashMap<&str, &SessionFacts>,
+) -> Option<Achievement> {
+    let mut ids: Vec<String> = achievement
+        .session_ids
+        .iter()
+        .map(|id| id.strip_prefix("session:").unwrap_or(id))
+        .filter(|id| sessions.contains_key(*id))
+        .map(String::from)
+        .collect();
+    if ids.is_empty() {
+        ids = achievement
+            .outcomes
+            .iter()
+            .flat_map(|outcome| &outcome.evidence_refs)
+            .filter_map(|reference| ref_session_id(reference))
+            .filter(|id| sessions.contains_key(*id))
+            .map(String::from)
+            .collect();
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return None;
+    }
+
+    let cited: Vec<&SessionFacts> = ids
+        .iter()
+        .filter_map(|id| sessions.get(id.as_str()).copied())
+        .collect();
+    achievement.session_ids = ids;
+    for outcome in &mut achievement.outcomes {
+        gitfacts::verify_outcome(outcome, &cited, &mut achievement.uncertainties);
+    }
+    Some(achievement)
+}
+
+pub fn prepare_achievements(
+    achievements: Vec<Achievement>,
+    sessions: &[SessionFacts],
+) -> Vec<Achievement> {
+    let sessions = session_index(sessions);
+    achievements
+        .into_iter()
+        .filter_map(|achievement| prepare_achievement(achievement, &sessions))
+        .collect()
 }
 
 fn build_candidates(
@@ -376,42 +437,17 @@ fn build_candidates(
     achievements: Vec<Achievement>,
     model: Option<String>,
 ) -> Vec<Candidate> {
+    let sessions_by_id = session_index(sessions);
     let mut out = Vec::new();
-    for (i, mut a) in achievements.into_iter().enumerate() {
-        // The model sometimes fills session_ids with "session:<id>" refs, or
-        // cites sessions only via outcome evidence_refs; an exact-id match
-        // here silently discarded whole achievements.
-        let mut ids: Vec<String> = a
+    for (i, achievement) in achievements.into_iter().enumerate() {
+        let Some(a) = prepare_achievement(achievement, &sessions_by_id) else {
+            continue;
+        };
+        let cited: Vec<&SessionFacts> = a
             .session_ids
             .iter()
-            .map(|id| id.strip_prefix("session:").unwrap_or(id))
-            .filter(|id| sessions.iter().any(|s| s.session_id == *id))
-            .map(String::from)
+            .filter_map(|id| sessions_by_id.get(id.as_str()).copied())
             .collect();
-        if ids.is_empty() {
-            ids = a
-                .outcomes
-                .iter()
-                .flat_map(|o| o.evidence_refs.iter())
-                .filter_map(|r| ref_session_id(r))
-                .filter(|id| sessions.iter().any(|s| s.session_id == *id))
-                .map(String::from)
-                .collect();
-        }
-        ids.sort();
-        ids.dedup();
-        a.session_ids = ids;
-        if a.session_ids.is_empty() {
-            continue;
-        }
-        let cited: Vec<&SessionFacts> = sessions
-            .iter()
-            .filter(|s| a.session_ids.contains(&s.session_id))
-            .collect();
-        let mut uncertainties = a.uncertainties.clone();
-        for outcome in a.outcomes.iter_mut() {
-            gitfacts::verify_outcome(outcome, &cited, &mut uncertainties);
-        }
         let level = a
             .outcomes
             .iter()
@@ -432,7 +468,7 @@ fn build_candidates(
             title: a.title,
             contribution: a.contribution,
             outcomes: a.outcomes,
-            uncertainties,
+            uncertainties: a.uncertainties,
             confidence: a.confidence.clamp(0.0, 1.0),
             evidence_level: level,
             session_ids: a.session_ids,
@@ -453,7 +489,7 @@ mod tests {
 
     #[test]
     fn eval_window_covers_fifteen_calendar_days() {
-        let min_day = day_offset("2026-07-24", -(EVAL_WINDOW_DAYS - 1));
+        let min_day = calendar::offset("2026-07-24", -(EVAL_WINDOW_DAYS - 1));
         assert_eq!(min_day, "2026-07-10");
     }
 
@@ -545,9 +581,13 @@ mod tests {
                 session_ids: vec!["unknown".into()],
             },
         ];
-        let cands = build_candidates("2026-07-20", &sessions, achievements, Some("claude-opus-5".into()));
+        let cands = build_candidates(
+            "2026-07-20",
+            &sessions,
+            achievements,
+            Some("claude-opus-5".into()),
+        );
         assert_eq!(cands.len(), 4);
-        // Claimed commit-level (4) but only a passing test ref: downgraded to 3, flagged.
         assert_eq!(cands[0].evidence_level, 3);
         assert!(!cands[0].outcomes[0].verified);
         assert!(!cands[0].uncertainties.is_empty());
@@ -586,19 +626,38 @@ mod tests {
     #[test]
     fn merging_spans_days_and_keeps_every_verified_outcome() {
         let scoping = part("a", "2026-07-19", 1, "Scoped the checks", "Approach agreed");
-        let building = part("b", "2026-07-20", 4, "Added the checks", "Committed the scanner");
+        let building = part(
+            "b",
+            "2026-07-20",
+            4,
+            "Added the checks",
+            "Committed the scanner",
+        );
 
         let merged = merge_into_one(&[building.clone(), scoping.clone()]);
 
-        assert_eq!(merged.day, "2026-07-19", "dated from where the work started");
+        assert_eq!(
+            merged.day, "2026-07-19",
+            "dated from where the work started"
+        );
         assert_eq!(merged.day_end.as_deref(), Some("2026-07-20"));
-        assert_eq!(merged.title, "Added the checks", "title from the best-evidenced part");
+        assert_eq!(
+            merged.title, "Added the checks",
+            "title from the best-evidenced part"
+        );
         assert_eq!(merged.evidence_level, 4);
         assert_eq!(merged.outcomes.len(), 2);
         assert!(merged.outcomes.iter().all(|o| o.verified));
-        assert_eq!(merged.uncertainties.len(), 1, "identical uncertainties collapse");
+        assert_eq!(
+            merged.uncertainties.len(),
+            1,
+            "identical uncertainties collapse"
+        );
         assert_eq!(merged.session_ids, vec!["s-a".to_string(), "s-b".into()]);
-        assert!(merged.contribution.starts_with("Did Scoped"), "read in day order");
+        assert!(
+            merged.contribution.starts_with("Did Scoped"),
+            "read in day order"
+        );
     }
 
     #[test]

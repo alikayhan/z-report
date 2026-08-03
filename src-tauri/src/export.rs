@@ -1,18 +1,13 @@
+use crate::calendar;
 use crate::models::*;
 use std::collections::BTreeMap;
 
-fn fmt_day(day: &str, fmt: &str) -> String {
-    chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
-        .map(|d| d.format(fmt).to_string())
-        .unwrap_or_else(|_| day.to_string())
-}
-
 fn short_day(day: &str) -> String {
-    fmt_day(day, "%b %-d")
+    calendar::format(day, "%b %-d")
 }
 
 fn pretty_day(day: &str) -> String {
-    fmt_day(day, "%A, %B %-d, %Y")
+    calendar::format(day, "%A, %B %-d, %Y")
 }
 
 pub fn to_markdown(entries: &[JournalEntry], from: &str, to: &str) -> String {
@@ -44,7 +39,7 @@ pub fn to_markdown(entries: &[JournalEntry], from: &str, to: &str) -> String {
             md.push_str(&format!("_{}{}_\n\n", span, level_label(e.evidence_level)));
             md.push_str(&format!("{}\n", e.contribution.trim()));
             if !e.outcomes.is_empty() {
-                md.push_str("\n");
+                md.push('\n');
                 for o in &e.outcomes {
                     let marker = if o.verified { "✓" } else { "•" };
                     md.push_str(&format!(
@@ -117,7 +112,10 @@ mod tests {
         let entries = [entries, vec![spanning]].concat();
         let md = to_markdown(&entries, "2026-07-14", "2026-07-20");
         assert!(md.contains("_Jul 18 – Jul 20 · Committed_"));
-        assert!(md.contains("_Locally verified_"), "single-day entries keep a bare label");
+        assert!(
+            md.contains("_Locally verified_"),
+            "single-day entries keep a bare label"
+        );
         assert!(md.contains("# Z Report — 2026-07-14 to 2026-07-20"));
         assert!(md.contains("### Fixed flaky auth test"));
         assert!(md.contains("✓ Auth test suite passes"));
