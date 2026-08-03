@@ -5,7 +5,6 @@
       <stop offset="1" stop-color="#0C110E"/>
     </linearGradient>
   </defs>
-  <!-- 824px squircle on the 1024 canvas: Apple's macOS icon grid -->
   <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#housing)"/>
   <path fill="#F7F2E6" d="M299,246
     L334.5,282 L370,246 L405.5,282 L441,246 L476.5,282 L512,246
