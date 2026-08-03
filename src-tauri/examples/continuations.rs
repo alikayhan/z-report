@@ -1,6 +1,4 @@
-//! Read-only threshold harness. Usage: cargo run --example continuations [path/to/zreport.db]
-
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use z_report_lib::ingest;
 use z_report_lib::models::SessionFacts;
 use z_report_lib::related::{self, MatchFacts, RELATED_THRESHOLD};
@@ -14,13 +12,16 @@ fn main() -> anyhow::Result<()> {
     let pending = store.candidates_by_status("pending")?;
     eprintln!("{} pending candidate(s)", pending.len());
 
-    // Facts stored before titles were captured have none, so re-parse.
     let paths: HashMap<String, _> = ingest::discover()
         .into_iter()
         .map(|f| (f.session_id, f.path))
         .collect();
     let mut sessions: Vec<SessionFacts> = Vec::new();
-    for id in pending.iter().flat_map(|c| &c.session_ids) {
+    let session_ids: HashSet<&str> = pending
+        .iter()
+        .flat_map(|candidate| candidate.session_ids.iter().map(String::as_str))
+        .collect();
+    for id in session_ids {
         let Some(path) = paths.get(id) else { continue };
         if let Ok(facts) = ingest::parse_transcript(path, id, true) {
             sessions.push(facts);
@@ -51,7 +52,11 @@ fn main() -> anyhow::Result<()> {
         println!(
             "{:.3} {}  {} [{}]\n            {} [{}]",
             s,
-            if *s >= RELATED_THRESHOLD { "SUGGEST" } else { "below  " },
+            if *s >= RELATED_THRESHOLD {
+                "SUGGEST"
+            } else {
+                "below  "
+            },
             a.title,
             a.day,
             b.title,

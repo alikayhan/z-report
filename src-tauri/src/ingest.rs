@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::text;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -35,7 +36,6 @@ fn is_transcript(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "jsonl")
 }
 
-/// Transcripts of work the session delegated, written beside the parent.
 fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(transcript.with_extension("").join("subagents")) else {
         return Vec::new();
@@ -92,15 +92,6 @@ pub fn discover() -> Vec<DiscoveredFile> {
     out
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max).collect();
-        format!("{cut}…")
-    }
-}
-
 fn earlier(a: &str, b: &str) -> bool {
     match (
         chrono::DateTime::parse_from_rfc3339(a),
@@ -111,8 +102,6 @@ fn earlier(a: &str, b: &str) -> bool {
     }
 }
 
-/// Widens the session span. Sidechain files are read after the parent, so
-/// records do not arrive in chronological order.
 fn update_timestamps(facts: &mut SessionFacts, ts: &str) {
     if facts.first_ts.as_deref().is_none_or(|cur| earlier(ts, cur)) {
         facts.first_ts = Some(ts.to_string());
@@ -125,18 +114,44 @@ fn update_timestamps(facts: &mut SessionFacts, ts: &str) {
 fn classify_command(cmd: &str) -> &'static str {
     let c = cmd.to_lowercase();
     let test_markers = [
-        "cargo test", "npm test", "npm run test", "pytest", "jest", "vitest",
-        "go test", "xcodebuild test", "swift test", "mvn test", "gradle test",
-        "rspec", "phpunit", "bundle exec rspec",
+        "cargo test",
+        "npm test",
+        "npm run test",
+        "pytest",
+        "jest",
+        "vitest",
+        "go test",
+        "xcodebuild test",
+        "swift test",
+        "mvn test",
+        "gradle test",
+        "rspec",
+        "phpunit",
+        "bundle exec rspec",
     ];
     let build_markers = [
-        "cargo build", "npm run build", "tsc", "xcodebuild build", "swift build",
-        "make", "go build", "gradle build", "mvn package", "vite build", "webpack",
+        "cargo build",
+        "npm run build",
+        "tsc",
+        "xcodebuild build",
+        "swift build",
+        "make",
+        "go build",
+        "gradle build",
+        "mvn package",
+        "vite build",
+        "webpack",
         "cargo check",
     ];
     let check_markers = [
-        "clippy", "eslint", "lint", "fmt --check", "prettier --check", "typecheck",
-        "mypy", "ruff",
+        "clippy",
+        "eslint",
+        "lint",
+        "fmt --check",
+        "prettier --check",
+        "typecheck",
+        "mypy",
+        "ruff",
     ];
     if test_markers.iter().any(|m| c.contains(m)) {
         "test"
@@ -152,13 +167,35 @@ fn classify_command(cmd: &str) -> &'static str {
 }
 
 const MUTATING_VERBS: &[&str] = &[
-    "add", "append", "archive", "assign", "close", "copy", "create", "delete", "duplicate", "edit",
-    "insert", "merge", "move", "post", "publish", "remove", "rename", "reply", "schedule", "send",
-    "set", "submit", "transition", "update", "upload", "write",
+    "add",
+    "append",
+    "archive",
+    "assign",
+    "close",
+    "copy",
+    "create",
+    "delete",
+    "duplicate",
+    "edit",
+    "insert",
+    "merge",
+    "move",
+    "post",
+    "publish",
+    "remove",
+    "rename",
+    "reply",
+    "schedule",
+    "send",
+    "set",
+    "submit",
+    "transition",
+    "update",
+    "upload",
+    "write",
 ];
 
-/// Nothing in the record says whether a call changed anything, so it is inferred
-/// from the name. Whole words only: "getTransitionsForJiraIssue" is a read.
+// Tool metadata has no mutability flag, so only whole action words count as writes.
 fn mutates_external_state(tool: &str) -> bool {
     let mut words = String::new();
     for c in tool.chars() {
@@ -186,10 +223,12 @@ struct Parse {
     pr_urls: HashSet<String>,
 }
 
-/// Parse a full session transcript into normalized facts.
-/// The JSONL schema is internal to Claude Code, so parsing is defensive:
-/// unknown record types are skipped, missing fields degrade to None.
-pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) -> Result<SessionFacts> {
+// Transcript JSONL is undocumented; unknown records and missing fields are ignored.
+pub fn parse_transcript(
+    path: &Path,
+    session_id: &str,
+    retain_prompts: bool,
+) -> Result<SessionFacts> {
     let mut p = Parse {
         facts: SessionFacts {
             session_id: session_id.to_string(),
@@ -213,7 +252,7 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
         results,
         ..
     } = p;
-    // A call with no recorded result was never reported as failing.
+    // Missing tool results carry no evidence of failure.
     let succeeded = |id: &str| results.get(id).copied().unwrap_or(true);
     facts.commands = commands
         .into_iter()
@@ -240,171 +279,190 @@ pub fn parse_transcript(path: &PathBuf, session_id: &str, retain_prompts: bool) 
 
 fn absorb(p: &mut Parse, content: &str) {
     for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let rec_type = v["type"].as_str().unwrap_or("");
-        if rec_type == "ai-title" {
-            if let Some(t) = v["aiTitle"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
-                p.facts.title = Some(truncate(t, TITLE_CHARS));
-            }
-            continue;
+        if let Ok(record) = serde_json::from_str::<Value>(line) {
+            absorb_record(p, &record);
         }
-        if rec_type == "pr-link" {
-            let Some(number) = v["prNumber"].as_u64() else {
-                continue;
-            };
-            let (Some(url), Some(repository)) = (v["prUrl"].as_str(), v["prRepository"].as_str())
-            else {
-                continue;
-            };
-            let pr = PrLink {
-                number,
-                url: url.to_string(),
-                repository: repository.to_string(),
-                ts: v["timestamp"].as_str().map(String::from),
-            };
-            if !pr.has_canonical_url() {
-                continue;
-            }
-            // A PR opened after midnight files the session under the day the work
-            // finished, and widens the Git window to catch the commit just before it.
-            if let Some(ts) = pr.ts.as_deref() {
-                update_timestamps(&mut p.facts, ts);
-            }
-            if p.pr_urls.insert(pr.url.clone()) {
-                p.facts.pr_links.push(pr);
-            }
-            continue;
-        }
-        if rec_type != "user" && rec_type != "assistant" {
-            continue;
-        }
-        let delegated = v["isSidechain"].as_bool() == Some(true);
-        if let Some(ts) = v["timestamp"].as_str() {
-            update_timestamps(&mut p.facts, ts);
-        }
-        // A delegate can run in its own worktree, so its cwd and branch are not
-        // the session's; only the parent defines where the work happened.
-        if !delegated {
-            if let Some(cwd) = v["cwd"].as_str() {
-                p.facts.cwd = Some(cwd.to_string());
-            }
-            if let Some(branch) = v["gitBranch"].as_str() {
-                if !branch.is_empty() && branch != "HEAD" {
-                    p.facts.git_branch = Some(branch.to_string());
-                }
-            }
-            if let Some(ver) = v["version"].as_str() {
-                p.facts.cli_version = Some(ver.to_string());
-            }
-        }
+    }
+}
 
-        if rec_type == "user" {
-            let msg = &v["message"];
-            if let Some(text) = msg["content"].as_str() {
-                // A sidechain user record carries the delegating instruction, not
-                // anything the developer typed.
-                let is_human =
-                    !delegated && v["origin"]["kind"].as_str().map_or(true, |k| k == "human");
-                let is_meta = text.starts_with('<') || text.starts_with("[Request interrupted");
-                if is_human && !is_meta && p.facts.prompts.len() < MAX_PROMPTS {
-                    p.facts.prompts.push(truncate(text.trim(), PROMPT_CHARS));
-                }
-            } else if let Some(blocks) = msg["content"].as_array() {
-                for b in blocks {
-                    if b["type"].as_str() == Some("tool_result") {
-                        if let Some(id) = b["tool_use_id"].as_str() {
-                            p.results
-                                .insert(id.to_string(), b["is_error"].as_bool() != Some(true));
-                        }
-                    }
-                }
+fn absorb_record(p: &mut Parse, record: &Value) {
+    match record["type"].as_str() {
+        Some("ai-title") => {
+            if let Some(title) = record["aiTitle"]
+                .as_str()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+            {
+                p.facts.title = Some(text::truncate(title, TITLE_CHARS));
             }
-        } else {
-            let Some(blocks) = v["message"]["content"].as_array() else {
-                continue;
-            };
-            for b in blocks {
-                match b["type"].as_str() {
-                    Some("text") => {
-                        if let Some(t) = b["text"].as_str() {
-                            if !delegated && !t.trim().is_empty() {
-                                p.facts.final_response = Some(truncate(t.trim(), RESPONSE_CHARS));
-                            }
-                        }
-                    }
-                    Some("tool_use") => {
-                        let name = b["name"].as_str().unwrap_or("");
-                        let input = &b["input"];
-                        match name {
-                            "Bash" => {
-                                if let (Some(id), Some(cmd)) =
-                                    (b["id"].as_str(), input["command"].as_str())
-                                {
-                                    let fact = CommandFact {
-                                        id: format!(
-                                            "cmd:{}:{}",
-                                            p.facts.session_id,
-                                            p.commands.len()
-                                        ),
-                                        command: truncate(cmd, 300),
-                                        ok: true,
-                                        kind: classify_command(cmd).to_string(),
-                                        ts: v["timestamp"].as_str().map(String::from),
-                                        via_delegate: delegated,
-                                    };
-                                    p.commands.push((id.to_string(), fact));
-                                }
-                            }
-                            "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
-                                if let Some(fp) = input["file_path"].as_str() {
-                                    let entry =
-                                        p.files.entry(fp.to_string()).or_insert(FileChange {
-                                            path: fp.to_string(),
-                                            tool: name.to_string(),
-                                            count: 0,
-                                            via_delegate: delegated,
-                                        });
-                                    entry.count += 1;
-                                    // Touching a file yourself claims it, however much
-                                    // of the editing a delegate did.
-                                    entry.via_delegate &= delegated;
-                                }
-                            }
-                            _ => {
-                                let Some((server, tool)) = name
-                                    .strip_prefix("mcp__")
-                                    .and_then(|rest| rest.split_once("__"))
-                                else {
-                                    continue;
-                                };
-                                let Some(id) = b["id"].as_str() else { continue };
-                                let action = ExternalAction {
-                                    id: format!(
-                                        "action:{}:{}",
-                                        p.facts.session_id,
-                                        p.actions.len()
-                                    ),
-                                    server: server.to_string(),
-                                    tool: tool.to_string(),
-                                    ok: true,
-                                    mutating: mutates_external_state(tool),
-                                    ts: v["timestamp"].as_str().map(String::from),
-                                    via_delegate: delegated,
-                                };
-                                p.actions.push((id.to_string(), action));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+        }
+        Some("pr-link") => absorb_pr_link(p, record),
+        Some(kind @ ("user" | "assistant")) => {
+            let delegated = record["isSidechain"].as_bool() == Some(true);
+            if let Some(timestamp) = record["timestamp"].as_str() {
+                update_timestamps(&mut p.facts, timestamp);
+            }
+            if !delegated {
+                absorb_session_metadata(&mut p.facts, record);
+            }
+            if kind == "user" {
+                absorb_user(p, record, delegated);
+            } else {
+                absorb_assistant(p, record, delegated);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn absorb_pr_link(p: &mut Parse, record: &Value) {
+    let Some(number) = record["prNumber"].as_u64() else {
+        return;
+    };
+    let (Some(url), Some(repository)) = (record["prUrl"].as_str(), record["prRepository"].as_str())
+    else {
+        return;
+    };
+    let pr = PrLink {
+        number,
+        url: url.to_owned(),
+        repository: repository.to_owned(),
+        ts: record["timestamp"].as_str().map(String::from),
+    };
+    if !pr.has_canonical_url() {
+        return;
+    }
+    // PR timestamps extend the session span across midnight and its Git correlation window.
+    if let Some(timestamp) = pr.ts.as_deref() {
+        update_timestamps(&mut p.facts, timestamp);
+    }
+    if p.pr_urls.insert(pr.url.clone()) {
+        p.facts.pr_links.push(pr);
+    }
+}
+
+fn absorb_session_metadata(facts: &mut SessionFacts, record: &Value) {
+    if let Some(cwd) = record["cwd"].as_str() {
+        facts.cwd = Some(cwd.to_owned());
+    }
+    if let Some(branch) = record["gitBranch"].as_str() {
+        if !branch.is_empty() && branch != "HEAD" {
+            facts.git_branch = Some(branch.to_owned());
+        }
+    }
+    if let Some(version) = record["version"].as_str() {
+        facts.cli_version = Some(version.to_owned());
+    }
+}
+
+fn absorb_user(p: &mut Parse, record: &Value, delegated: bool) {
+    let message = &record["message"];
+    if let Some(prompt) = message["content"].as_str() {
+        let is_human = !delegated
+            && record["origin"]["kind"]
+                .as_str()
+                .is_none_or(|kind| kind == "human");
+        let is_meta = prompt.starts_with('<') || prompt.starts_with("[Request interrupted");
+        if is_human && !is_meta && p.facts.prompts.len() < MAX_PROMPTS {
+            p.facts
+                .prompts
+                .push(text::truncate(prompt.trim(), PROMPT_CHARS));
+        }
+        return;
+    }
+
+    let Some(blocks) = message["content"].as_array() else {
+        return;
+    };
+    for block in blocks {
+        if block["type"].as_str() == Some("tool_result") {
+            if let Some(id) = block["tool_use_id"].as_str() {
+                p.results
+                    .insert(id.to_owned(), block["is_error"].as_bool() != Some(true));
             }
         }
     }
 }
 
-/// Local calendar day a session belongs to (day of last activity).
+fn absorb_assistant(p: &mut Parse, record: &Value, delegated: bool) {
+    let Some(blocks) = record["message"]["content"].as_array() else {
+        return;
+    };
+    for block in blocks {
+        match block["type"].as_str() {
+            Some("text") => absorb_response(p, block, delegated),
+            Some("tool_use") => absorb_tool_use(p, block, record["timestamp"].as_str(), delegated),
+            _ => {}
+        }
+    }
+}
+
+fn absorb_response(p: &mut Parse, block: &Value, delegated: bool) {
+    let Some(response) = block["text"].as_str().map(str::trim) else {
+        return;
+    };
+    if !delegated && !response.is_empty() {
+        p.facts.final_response = Some(text::truncate(response, RESPONSE_CHARS));
+    }
+}
+
+fn absorb_tool_use(p: &mut Parse, block: &Value, timestamp: Option<&str>, delegated: bool) {
+    let name = block["name"].as_str().unwrap_or("");
+    let input = &block["input"];
+    match name {
+        "Bash" => {
+            let (Some(id), Some(command)) = (block["id"].as_str(), input["command"].as_str())
+            else {
+                return;
+            };
+            let fact = CommandFact {
+                id: format!("cmd:{}:{}", p.facts.session_id, p.commands.len()),
+                command: text::truncate(command, 300),
+                ok: true,
+                kind: classify_command(command).to_owned(),
+                ts: timestamp.map(String::from),
+                via_delegate: delegated,
+            };
+            p.commands.push((id.to_owned(), fact));
+        }
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
+            let Some(path) = input["file_path"].as_str() else {
+                return;
+            };
+            let entry = p.files.entry(path.to_owned()).or_insert(FileChange {
+                path: path.to_owned(),
+                tool: name.to_owned(),
+                count: 0,
+                via_delegate: delegated,
+            });
+            entry.count += 1;
+            // Any direct edit makes the combined file change direct.
+            entry.via_delegate &= delegated;
+        }
+        _ => {
+            let Some((server, tool)) = name
+                .strip_prefix("mcp__")
+                .and_then(|rest| rest.split_once("__"))
+            else {
+                return;
+            };
+            let Some(id) = block["id"].as_str() else {
+                return;
+            };
+            let action = ExternalAction {
+                id: format!("action:{}:{}", p.facts.session_id, p.actions.len()),
+                server: server.to_owned(),
+                tool: tool.to_owned(),
+                ok: true,
+                mutating: mutates_external_state(tool),
+                ts: timestamp.map(String::from),
+                via_delegate: delegated,
+            };
+            p.actions.push((id.to_owned(), action));
+        }
+    }
+}
+
 pub fn session_day(facts: &SessionFacts) -> Option<String> {
     let ts = facts.last_ts.as_deref()?;
     let dt = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
@@ -459,7 +517,9 @@ mod tests {
         );
         assert_eq!(session_day(&facts).unwrap(), {
             let dt = chrono::DateTime::parse_from_rfc3339("2026-07-20T10:04:00.000Z").unwrap();
-            dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string()
         });
     }
 
@@ -548,8 +608,6 @@ mod tests {
         ] {
             assert!(mutates_external_state(tool), "{tool} should be a mutation");
         }
-        // The plural in "getTransitionsForJiraIssue" and the "set" inside
-        // "download_assets" are why matching is by whole word.
         for tool in [
             "getTransitionsForJiraIssue",
             "download_assets",
@@ -580,11 +638,27 @@ mod tests {
         std::fs::write(
             &parent,
             [
-                mcp("t1", "mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql", "2026-07-20T10:00:00.000Z"),
-                mcp("t2", "mcp__claude_ai_Atlassian__addCommentToJiraIssue", "2026-07-20T10:01:00.000Z"),
+                mcp(
+                    "t1",
+                    "mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql",
+                    "2026-07-20T10:00:00.000Z",
+                ),
+                mcp(
+                    "t2",
+                    "mcp__claude_ai_Atlassian__addCommentToJiraIssue",
+                    "2026-07-20T10:01:00.000Z",
+                ),
                 result("t2", false),
-                mcp("t3", "mcp__Claude_Preview__preview_screenshot", "2026-07-20T10:03:00.000Z"),
-                mcp("t4", "mcp__claude_ai_Notion__notion-update-page", "2026-07-20T10:04:00.000Z"),
+                mcp(
+                    "t3",
+                    "mcp__Claude_Preview__preview_screenshot",
+                    "2026-07-20T10:03:00.000Z",
+                ),
+                mcp(
+                    "t4",
+                    "mcp__claude_ai_Notion__notion-update-page",
+                    "2026-07-20T10:04:00.000Z",
+                ),
                 result("t4", true),
             ]
             .join("\n"),
@@ -610,9 +684,11 @@ mod tests {
                 ("action:s4:4", "editJiraIssue", true, true),
             ]
         );
-        // Reads are kept so a better guess can reclassify them, but never cited.
         assert_eq!(facts.external_actions.len(), 5);
-        assert_eq!(facts.external_changes().next().unwrap().server, "claude_ai_Atlassian");
+        assert_eq!(
+            facts.external_changes().next().unwrap().server,
+            "claude_ai_Atlassian"
+        );
         assert!(facts.has_substance());
     }
 
@@ -661,10 +737,7 @@ mod tests {
             }
         );
         assert_eq!(facts.pr_links[1].number, 5160);
-        assert_eq!(
-            facts.last_ts.as_deref(),
-            Some("2026-07-21T00:06:00.000Z")
-        );
+        assert_eq!(facts.last_ts.as_deref(), Some("2026-07-21T00:06:00.000Z"));
         assert_eq!(
             session_day(&facts),
             Some(

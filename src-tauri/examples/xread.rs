@@ -1,10 +1,6 @@
-//! Manual end-to-end harness: evaluate one day's ingested sessions and print
-//! the drafted achievements without writing to the review queue.
-//! Usage: cargo run --example xread [YYYY-MM-DD]
-
 use z_report_lib::evaluator;
-use z_report_lib::gitfacts;
 use z_report_lib::models::SessionFacts;
+use z_report_lib::pipeline;
 use z_report_lib::store::Store;
 
 fn main() -> anyhow::Result<()> {
@@ -19,7 +15,10 @@ fn main() -> anyhow::Result<()> {
         .map(|(_, f)| f)
         .filter(SessionFacts::has_substance)
         .collect();
-    eprintln!("evaluating {} substantial session(s) for {day}", sessions.len());
+    eprintln!(
+        "evaluating {} substantial session(s) for {day}",
+        sessions.len()
+    );
     if sessions.is_empty() {
         return Ok(());
     }
@@ -33,15 +32,7 @@ fn main() -> anyhow::Result<()> {
         result.duration_ms.unwrap_or(0) as f64 / 1000.0
     );
 
-    for mut a in result.achievements {
-        let cited: Vec<&SessionFacts> = sessions
-            .iter()
-            .filter(|s| a.session_ids.contains(&s.session_id))
-            .collect();
-        let mut uncertainties = a.uncertainties.clone();
-        for o in a.outcomes.iter_mut() {
-            gitfacts::verify_outcome(o, &cited, &mut uncertainties);
-        }
+    for a in pipeline::prepare_achievements(result.achievements, &sessions) {
         println!("\n## {} (conf {:.2})", a.title, a.confidence);
         println!("{}", a.contribution);
         for o in &a.outcomes {
@@ -52,7 +43,7 @@ fn main() -> anyhow::Result<()> {
                 o.claim
             );
         }
-        for u in &uncertainties {
+        for u in &a.uncertainties {
             println!("  ? {u}");
         }
     }

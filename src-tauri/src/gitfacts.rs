@@ -1,5 +1,5 @@
 use crate::models::*;
-use std::path::Path;
+use crate::text;
 use std::process::Command;
 
 fn git(dir: &str, args: &[&str]) -> Option<String> {
@@ -16,9 +16,6 @@ fn git(dir: &str, args: &[&str]) -> Option<String> {
 }
 
 pub fn repo_root(cwd: &str) -> Option<String> {
-    if !Path::new(cwd).exists() {
-        return None;
-    }
     git(cwd, &["rev-parse", "--show-toplevel"])
 }
 
@@ -27,15 +24,9 @@ pub fn commit_exists(repo: &str, sha: &str) -> bool {
         return false;
     }
     let spec = format!("{sha}^{{commit}}");
-    Command::new("git")
-        .args(["-C", repo, "cat-file", "-e", &spec])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    git(repo, &["cat-file", "-e", &spec]).is_some()
 }
 
-/// Commits authored in the window [since, until] (RFC3339), by the repo's
-/// configured user if set — someone else's commits are not the user's work.
 pub fn commits_in_window(repo: &str, since: &str, until: &str) -> Vec<CommitFact> {
     let mut args = vec![
         "log".to_string(),
@@ -97,7 +88,6 @@ pub fn commits_in_window(repo: &str, since: &str, until: &str) -> Vec<CommitFact
     commits
 }
 
-/// Attach repo root and same-day commits to session facts.
 pub fn correlate(facts: &mut SessionFacts) {
     let Some(cwd) = facts.cwd.clone() else { return };
     facts.repo_root = repo_root(&cwd);
@@ -115,89 +105,93 @@ pub fn correlate(facts: &mut SessionFacts) {
     facts.commits = commits_in_window(&repo, &first, &until);
 }
 
-/// Highest evidence level a set of refs deterministically supports.
-/// Refs: "commit:<sha>", "pr:<owner>/<repo>#<n>", "cmd:<session>:<n>",
-/// "action:<session>:<n>", "file:<path>", "session:<id>".
+fn supported_level(reference: &str, sessions: &[&SessionFacts]) -> u8 {
+    if let Some(sha) = reference.strip_prefix("commit:") {
+        if sessions
+            .iter()
+            .filter_map(|session| session.repo_root.as_deref())
+            .any(|repo| commit_exists(repo, sha))
+        {
+            4
+        } else {
+            0
+        }
+    } else if let Some((repository, number)) = PrLink::parse_evidence_ref(reference) {
+        if sessions.iter().any(|session| {
+            !session.files_changed.is_empty()
+                && session
+                    .pr_links
+                    .iter()
+                    .any(|pr| pr.repository == repository && pr.number == number)
+        }) {
+            4
+        } else {
+            0
+        }
+    } else if reference.starts_with("cmd:") {
+        match sessions
+            .iter()
+            .flat_map(|session| &session.commands)
+            .find(|command| command.id == reference)
+        {
+            Some(command)
+                if command.ok && matches!(command.kind.as_str(), "test" | "build" | "check") =>
+            {
+                3
+            }
+            Some(command) if command.ok => 1,
+            _ => 0,
+        }
+    } else if reference.starts_with("action:") {
+        // External calls prove a change was attempted, not its real-world effect.
+        match sessions
+            .iter()
+            .flat_map(|session| session.external_changes())
+            .find(|action| action.id == reference)
+        {
+            Some(action) if action.ok => 2,
+            _ => 0,
+        }
+    } else if let Some(path) = reference.strip_prefix("file:") {
+        if sessions
+            .iter()
+            .flat_map(|session| &session.files_changed)
+            .any(|file| file.path == path || file.path.ends_with(path))
+        {
+            2
+        } else {
+            0
+        }
+    } else if let Some(id) = reference.strip_prefix("session:") {
+        if sessions.iter().any(|session| session.session_id == id) {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 pub fn verify_outcome(
     outcome: &mut Outcome,
     sessions: &[&SessionFacts],
     uncertainties: &mut Vec<String>,
 ) {
     let claimed = outcome.evidence_level.clamp(1, 4);
-    let mut supported: u8 = 0;
-    for r in &outcome.evidence_refs {
-        let level = if let Some(sha) = r.strip_prefix("commit:") {
-            let ok = sessions
-                .iter()
-                .filter_map(|s| s.repo_root.as_deref())
-                .any(|repo| commit_exists(repo, sha));
-            if ok {
-                4
-            } else {
-                0
-            }
-        } else if let Some((repository, number)) = PrLink::parse_evidence_ref(r) {
-            let ok = sessions.iter().any(|s| {
-                !s.files_changed.is_empty()
-                    && s.pr_links
-                        .iter()
-                        .any(|pr| pr.repository == repository && pr.number == number)
-            });
-            if ok {
-                4
-            } else {
-                0
-            }
-        } else if r.starts_with("cmd:") {
-            let found = sessions
-                .iter()
-                .flat_map(|s| &s.commands)
-                .find(|c| &c.id == r);
-            match found {
-                Some(c) if c.ok && matches!(c.kind.as_str(), "test" | "build" | "check") => 3,
-                Some(c) if c.ok => 1,
-                _ => 0,
-            }
-        } else if r.starts_with("action:") {
-            // The call is recorded, its effect on the outside world is not, so an
-            // external action never rises past "a change was produced".
-            let found = sessions
-                .iter()
-                .flat_map(|s| s.external_changes())
-                .find(|a| &a.id == r);
-            match found {
-                Some(a) if a.ok => 2,
-                _ => 0,
-            }
-        } else if let Some(path) = r.strip_prefix("file:") {
-            let ok = sessions
-                .iter()
-                .flat_map(|s| &s.files_changed)
-                .any(|f| f.path == path || f.path.ends_with(path));
-            if ok {
-                2
-            } else {
-                0
-            }
-        } else if r.starts_with("session:") {
-            let id = r.trim_start_matches("session:");
-            if sessions.iter().any(|s| s.session_id == id) {
-                1
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-        supported = supported.max(level);
-    }
+    let supported = outcome
+        .evidence_refs
+        .iter()
+        .map(|reference| supported_level(reference, sessions))
+        .max()
+        .unwrap_or(0);
     outcome.verified = claimed <= supported;
     if !outcome.verified {
         let final_level = supported.max(1);
         if claimed > final_level {
             uncertainties.push(format!(
                 "Claim \"{}\" was stated as \"{}\" but local facts only support \"{}\".",
-                truncate_claim(&outcome.claim),
+                text::truncate(&outcome.claim, 80),
                 level_label(claimed),
                 level_label(final_level)
             ));
@@ -205,14 +199,6 @@ pub fn verify_outcome(
         outcome.evidence_level = final_level;
     } else {
         outcome.evidence_level = claimed;
-    }
-}
-
-fn truncate_claim(s: &str) -> String {
-    if s.len() > 80 {
-        format!("{}…", &s[..s.char_indices().take(80).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(80)])
-    } else {
-        s.to_string()
     }
 }
 

@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { api, inTauri, levelLabel, Candidate, JournalEntry, Overview, PrLink, Settings } from "./api";
+import { api, inTauri, levelLabel, Candidate, EvalRun, JournalEntry, Overview, PrLink, Settings } from "./api";
 import "./styles.css";
 
 type View = "review" | "journal" | "export" | "settings";
@@ -24,16 +24,16 @@ const state = {
   exportPreview: "",
   exportEntries: [] as JournalEntry[],
   settings: null as Settings | null,
+  evalRuns: [] as EvalRun[],
   lastError: "",
 };
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const HTML_ENTITIES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 
 function esc(s: string): string {
-  const d = document.createElement("span");
-  d.textContent = s;
-  return d.innerHTML;
+  return s.replace(/[&<>]/g, (char) => HTML_ENTITIES[char]);
 }
 
 function escAttr(s: string): string {
@@ -42,7 +42,6 @@ function escAttr(s: string): string {
 
 const plural = (n: number, word: string, words = word + "s") => `${n} ${n === 1 ? word : words}`;
 
-// Two-step confirm for destructive buttons; arming decays after 2.5 s.
 function armConfirm(btn: HTMLElement, armed: string, label: string): boolean {
   if (btn.dataset.confirm === "1") {
     btn.dataset.confirm = "";
@@ -76,13 +75,13 @@ const dayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "shor
 const shortDayFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 
 function shortDay(day: string): string {
-  const d = new Date(day + "T12:00:00");
+  const d = parseCalendarDay(day);
   if (Number.isNaN(d.getTime())) return day;
   return shortDayFmt.format(d);
 }
 
 function dayHeading(day: string): string {
-  const d = new Date(day + "T12:00:00");
+  const d = parseCalendarDay(day);
   if (Number.isNaN(d.getTime())) return day;
   return dayFmt.format(d).replace(",", "").toUpperCase();
 }
@@ -95,14 +94,18 @@ function todayStr(): string {
   return state.overview?.today ?? new Date().toISOString().slice(0, 10);
 }
 
+function parseCalendarDay(day: string): Date {
+  return new Date(`${day}T12:00:00`);
+}
+
 function shiftDay(day: string, delta: number): string {
-  const d = new Date(day + "T12:00:00");
+  const d = parseCalendarDay(day);
   d.setDate(d.getDate() + delta);
   return d.toISOString().slice(0, 10);
 }
 
 function weekStart(day: string): string {
-  const d = new Date(day + "T12:00:00");
+  const d = parseCalendarDay(day);
   const dow = (d.getDay() + 6) % 7;
   d.setDate(d.getDate() - dow);
   return d.toISOString().slice(0, 10);
@@ -158,7 +161,9 @@ function renderQueue() {
   }
   const byDay = new Map<string, Candidate[]>();
   for (const c of state.pending) {
-    byDay.set(c.day, [...(byDay.get(c.day) ?? []), c]);
+    const candidates = byDay.get(c.day);
+    if (candidates) candidates.push(c);
+    else byDay.set(c.day, [c]);
   }
   for (const [day, cands] of [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))) {
     html += `<div class="day-head">${esc(dayHeading(day))}</div>`;
@@ -226,7 +231,6 @@ function outcomeRow(o: { claim: string; evidence_level: number; verified: boolea
   return `<div class="outcome">${mark}<span class="o-claim">${esc(o.claim)}</span><i class="o-leader"></i>${levelChip(o.evidence_level)}</div>`;
 }
 
-// Canonical form is enforced once at ingest; this guards only the href sink.
 function prLinksRow(links: PrLink[]): string {
   const html = links
     .filter((pr) => pr.url.startsWith("https://"))
@@ -269,8 +273,6 @@ function stopEditing() {
   state.draftOutcomes = null;
 }
 
-// Light path for selection moves: swap the active row class and reprint the
-// receipt without rebuilding the queue DOM (keyboard navigation repeats fast).
 function selectCard(id: string) {
   if (state.selId === id && !editing()) return;
   state.selId = id;
@@ -295,48 +297,57 @@ function renderReceipt() {
   const c = selected();
 
   if (!c) {
-    const o = state.overview;
-    $("#crumb").textContent = "Queue clear";
-    scroll.innerHTML = `<div class="counter-empty">
-      <span class="glyph">· · · Z · · ·</span>
-      <p>The till is quiet. ${
-        o && o.session_count > 0
-          ? `Your next Z-read closes the day at ${esc(o.zread_time)}.`
-          : "Work with Claude Code as usual — achievements appear here after the daily Z-read."
-      }</p>
-    </div>`;
-    bar.innerHTML = "";
-    return;
+    renderEmptyReceipt(scroll, bar);
+  } else if (editing()) {
+    renderEditableReceipt(c, scroll, bar);
+  } else {
+    renderCandidateReceipt(c, scroll, bar);
   }
+}
 
+function renderEmptyReceipt(scroll: HTMLElement, bar: HTMLElement) {
+  const o = state.overview;
+  $("#crumb").textContent = "Queue clear";
+  scroll.innerHTML = `<div class="counter-empty">
+    <span class="glyph">· · · Z · · ·</span>
+    <p>The till is quiet. ${
+      o && o.session_count > 0
+        ? `Your next Z-read closes the day at ${esc(o.zread_time)}.`
+        : "Work with Claude Code as usual — achievements appear here after the daily Z-read."
+    }</p>
+  </div>`;
+  bar.innerHTML = "";
+}
+
+function renderEditableReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLElement) {
   const sub = [daySpan(c.day, c.day_end), plural(c.session_ids.length, "session")].join(" · ");
+  const outcomes = state.draftOutcomes!;
+  scroll.innerHTML = `<article class="receipt"><div class="tear top"></div><div class="paper">
+    <div class="r-store">${esc(repoName(c.repo))}</div>
+    <div class="r-sub">${esc(sub)} · editing</div>
+    <hr class="dash">
+    <input class="edit-field title" id="edit-title" value="${escAttr(c.title)}" maxlength="120">
+    <div style="height:9px"></div>
+    <textarea class="edit-field" id="edit-body">${esc(c.contribution)}</textarea>
+    <hr class="dash">
+    ${
+      outcomes.length
+        ? outcomes
+            .map((o, i) => outcomeRow(o, `<button class="o-remove" data-rm="${i}" title="Remove this claim">✕</button>`))
+            .join("")
+        : `<div class="uncertainties">No outcome claims.</div>`
+    }
+  </div><div class="tear"></div></article>`;
+  bar.innerHTML = `
+    <button class="keycap violet" data-act="save-edit">Save</button>
+    <button class="keycap" data-act="cancel-edit">Cancel <span class="hint">esc</span></button>`;
+}
 
-  if (editing()) {
-    const outcomes = state.draftOutcomes!;
-    scroll.innerHTML = `<article class="receipt"><div class="tear top"></div><div class="paper">
-      <div class="r-store">${esc(repoName(c.repo))}</div>
-      <div class="r-sub">${esc(sub)} · editing</div>
-      <hr class="dash">
-      <input class="edit-field title" id="edit-title" value="${escAttr(c.title)}" maxlength="120">
-      <div style="height:9px"></div>
-      <textarea class="edit-field" id="edit-body">${esc(c.contribution)}</textarea>
-      <hr class="dash">
-      ${
-        outcomes.length
-          ? outcomes
-              .map((o, i) => outcomeRow(o, `<button class="o-remove" data-rm="${i}" title="Remove this claim">✕</button>`))
-              .join("")
-          : `<div class="uncertainties">No outcome claims.</div>`
-      }
-    </div><div class="tear"></div></article>`;
-    bar.innerHTML = `
-      <button class="keycap violet" data-act="save-edit">Save</button>
-      <button class="keycap" data-act="cancel-edit">Cancel <span class="hint">esc</span></button>`;
-    return;
-  }
-
-  const idx = state.pending.findIndex((x) => x.id === c.id);
-  $("#crumb").textContent = `Card ${idx + 1} of ${state.pending.length} · ${daySpan(c.day, c.day_end)}`;
+function renderCandidateReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLElement) {
+  const span = daySpan(c.day, c.day_end);
+  const sub = [span, plural(c.session_ids.length, "session")].join(" · ");
+  const idx = state.pending.findIndex((candidate) => candidate.id === c.id);
+  $("#crumb").textContent = `Card ${idx + 1} of ${state.pending.length} · ${span}`;
 
   const notes = [confidenceCaution(c.confidence), ...c.uncertainties].filter(Boolean);
   const uncertainties = notes.length
@@ -390,7 +401,6 @@ function stampReceipt(label: string, red: boolean, after: () => void) {
   window.setTimeout(after, 780);
 }
 
-// The card after the acted-on one, chosen before the queue reloads.
 function nextAfter(id: string): string | null {
   const i = state.pending.findIndex((c) => c.id === id);
   return state.pending[i + 1]?.id ?? state.pending[i - 1]?.id ?? null;
@@ -477,16 +487,12 @@ const PRESETS: [typeof state.exportPreset, string][] = [
   ["custom", "Custom"],
 ];
 
-function exportRange(): [string, string] {
-  return presetRange(state.exportPreset);
-}
-
 function rangeLabel(from: string, to: string): string {
   return from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`;
 }
 
 function renderExport() {
-  const [from, to] = exportRange();
+  const [from, to] = presetRange(state.exportPreset);
   $("#chips").innerHTML = PRESETS.map(
     ([id, label]) =>
       `<button class="chip ${state.exportPreset === id ? "active" : ""}" data-preset="${id}"><span>${label}</span><span>${
@@ -524,12 +530,11 @@ function presetRange(preset: typeof state.exportPreset): [string, string] {
 }
 
 async function loadExport() {
-  const [from, to] = exportRange();
+  const [from, to] = presetRange(state.exportPreset);
   try {
-    [state.exportPreview, state.exportEntries] = await Promise.all([
-      api.exportMarkdown(from, to),
-      api.journal(from, to),
-    ]);
+    const data = await api.exportData(from, to);
+    state.exportPreview = data.markdown;
+    state.exportEntries = data.entries;
   } catch (e) {
     state.exportPreview = String(e);
     state.exportEntries = [];
@@ -537,8 +542,6 @@ async function loadExport() {
 }
 
 /* ---------- settings ---------- */
-
-let runsCache = "";
 
 function renderSettings() {
   const s = state.settings;
@@ -598,7 +601,7 @@ function renderSettings() {
 
     <div class="settings-section">
       <h3>Recent evaluations</h3>
-      ${runsCache || `<p class="setting-hint">No evaluations yet.</p>`}
+      ${renderRuns(state.evalRuns, metered)}
     </div>
 
     <div class="settings-section">
@@ -629,13 +632,14 @@ function renderSettings() {
 }
 
 async function loadRuns() {
-  const runs = await api.evalRuns();
+  state.evalRuns = await api.evalRuns();
+}
+
+function renderRuns(runs: EvalRun[], metered: boolean): string {
   if (runs.length === 0) {
-    runsCache = "";
-    return;
+    return `<p class="setting-hint">No evaluations yet.</p>`;
   }
-  const metered = state.overview?.metered ?? false;
-  runsCache = `<table class="runs-table">
+  return `<table class="runs-table">
     <tr><th>Day</th><th>Kind</th><th>Model</th>${metered ? "<th>Cost</th>" : ""}<th>Found</th><th></th></tr>
     ${runs
       .slice(0, 8)
@@ -734,9 +738,8 @@ async function handleAct(act: string, target: HTMLElement) {
     case "delete-all": {
       if (!armConfirm(target, "Click again to erase everything", "Delete all data")) break;
       await api.deleteAllData();
-      state.settings = await api.getSettings();
-      await loadRuns();
-      await refreshAll();
+      const [settings] = await Promise.all([api.getSettings(), loadRuns(), refreshOverview()]);
+      state.settings = settings;
       render();
       break;
     }
@@ -746,21 +749,30 @@ async function handleAct(act: string, target: HTMLElement) {
 /* ---------- data loading ---------- */
 
 async function loadReview() {
-  [state.pending, state.discarded] = await Promise.all([
+  const [pending, discarded] = await Promise.all([
     api.candidates("pending"),
     api.candidates("discarded"),
   ]);
+  state.pending = pending;
+  state.discarded = discarded;
+  syncReviewSelection();
+}
+
+async function refreshOverview() {
+  state.overview = await api.overview();
+  renderSidebar();
+}
+
+async function refreshAll() {
+  await Promise.all([refreshOverview(), loadReview()]);
+}
+
+function syncReviewSelection() {
   state.selection = new Set([...state.selection].filter((id) => state.pending.some((c) => c.id === id)));
   if (!state.pending.some((c) => c.id === state.selId)) {
     state.selId = state.pending[0]?.id ?? null;
     stopEditing();
   }
-}
-
-async function refreshAll() {
-  state.overview = await api.overview();
-  await loadReview();
-  renderSidebar();
 }
 
 function render() {
@@ -781,11 +793,12 @@ function render() {
 }
 
 async function loadView(view: View) {
+  if (view === "review") await loadReview();
   if (view === "journal") await loadJournal();
   if (view === "export") await loadExport();
   if (view === "settings") {
-    state.settings = await api.getSettings();
-    await loadRuns();
+    const [settings] = await Promise.all([api.getSettings(), loadRuns()]);
+    state.settings = settings;
   }
 }
 
@@ -803,7 +816,12 @@ async function switchView(view: View) {
 
 /* ---------- boot ---------- */
 
-async function boot() {
+function handleActionEvent(e: Event) {
+  const actEl = (e.target as HTMLElement).closest<HTMLElement>("[data-act]");
+  if (actEl) void handleAct(actEl.dataset.act!, actEl);
+}
+
+function bindReviewEvents() {
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((b) => {
     b.addEventListener("click", () => void switchView(b.dataset.view as View));
   });
@@ -843,11 +861,7 @@ async function boot() {
     }
   });
 
-  const actHandler = (e: Event) => {
-    const actEl = (e.target as HTMLElement).closest<HTMLElement>("[data-act]");
-    if (actEl) void handleAct(actEl.dataset.act!, actEl);
-  };
-  $("#actionbar").addEventListener("click", actHandler);
+  $("#actionbar").addEventListener("click", handleActionEvent);
   $("#receipt-scroll").addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
     const rm = target.closest<HTMLElement>("[data-rm]");
@@ -856,7 +870,7 @@ async function boot() {
       renderReceipt();
       return;
     }
-    actHandler(e);
+    handleActionEvent(e);
   });
 
   $("#btn-merge").addEventListener("click", async () => {
@@ -879,7 +893,9 @@ async function boot() {
       renderQueue();
     }
   });
+}
 
+function bindJournalEvents() {
   let searchTimer: number | undefined;
   $("#journal-search").addEventListener("input", (e) => {
     window.clearTimeout(searchTimer);
@@ -936,7 +952,9 @@ async function boot() {
       ($("#roll").querySelector("[data-record]") as HTMLElement | null)?.click();
     }
   });
+}
 
+function bindExportEvents() {
   $("#chips").addEventListener("click", async (e) => {
     const chip = (e.target as HTMLElement).closest<HTMLElement>("[data-preset]");
     if (!chip) return;
@@ -961,7 +979,7 @@ async function boot() {
       toast("Saving to a file is available in the app");
       return;
     }
-    const [from, to] = exportRange();
+    const [from, to] = presetRange(state.exportPreset);
     const path = await save({
       defaultPath: from === to ? `z-report-${from}.md` : `z-report-${from}-to-${to}.md`,
       filters: [{ name: "Markdown", extensions: ["md"] }],
@@ -971,7 +989,9 @@ async function boot() {
       toast(`Saved ${path.split("/").pop()}`);
     }
   });
+}
 
+function bindKeyboardEvents() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && editing()) {
       stopEditing();
@@ -992,13 +1012,17 @@ async function boot() {
     else if (e.key === "x") discardSelected();
     else if (e.key === "e" && !editing()) startEdit();
   });
+}
 
-  $("#settings-col").addEventListener("click", actHandler);
+function bindSettingsEvents() {
+  $("#settings-col").addEventListener("click", handleActionEvent);
+}
 
+async function bindBackendEvents() {
   if (inTauri) {
     await listen("zr:refresh", async () => {
-      await refreshAll();
-      await loadView(state.view);
+      if (state.view === "review") await refreshAll();
+      else await Promise.all([refreshOverview(), loadView(state.view)]);
       render();
     });
     await listen<boolean>("zr:evaluating", (e) => {
@@ -1006,6 +1030,15 @@ async function boot() {
       renderSidebar();
     });
   }
+}
+
+async function boot() {
+  bindReviewEvents();
+  bindJournalEvents();
+  bindExportEvents();
+  bindKeyboardEvents();
+  bindSettingsEvents();
+  await bindBackendEvents();
 
   await refreshAll();
   const hash = location.hash.slice(1);

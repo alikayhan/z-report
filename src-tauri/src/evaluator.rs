@@ -3,7 +3,7 @@ use crate::store;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 pub const EVAL_MODEL: &str = "claude-opus-5";
@@ -58,26 +58,53 @@ fn claude_command(settings: &Settings) -> Result<Command> {
     Ok(cmd)
 }
 
-/// True only when runs are billed per-token (an API key); a subscription's cost
-/// is an estimate, not money. Auth we cannot confirm as an API key is not metered.
-pub fn is_metered(settings: &Settings) -> bool {
+fn structured_command(
+    settings: &Settings,
+    prompt: &str,
+    schema: &str,
+    tools: &str,
+    disallowed_tools: &str,
+) -> Result<Command> {
+    let mut cmd = claude_command(settings)?;
+    cmd.args([
+        "-p",
+        prompt,
+        "--model",
+        EVAL_MODEL,
+        "--output-format",
+        "json",
+        "--json-schema",
+        schema,
+        "--tools",
+        tools,
+        "--disallowedTools",
+        disallowed_tools,
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+    ])
+    .stdin(Stdio::null());
+    Ok(cmd)
+}
+
+// Only confirmed API-key auth is metered; subscription cost values are estimates.
+pub fn probe_status(settings: &Settings) -> (bool, bool) {
     let Ok(mut cmd) = claude_command(settings) else {
-        return false;
+        return (false, false);
     };
     let Ok(out) = cmd.args(["auth", "status", "--json"]).output() else {
-        return false;
+        return (true, false);
     };
     if !out.status.success() {
-        return false;
+        return (true, false);
     }
-    auth_is_metered(&String::from_utf8_lossy(&out.stdout))
+    (true, auth_is_metered(&String::from_utf8_lossy(&out.stdout)))
 }
 
 fn auth_is_metered(stdout: &str) -> bool {
     serde_json::from_str::<Value>(stdout.trim())
         .ok()
-        .and_then(|v| v["authMethod"].as_str().map(|m| m == "api-key"))
-        .unwrap_or(false)
+        .is_some_and(|value| value["authMethod"].as_str() == Some("api-key"))
 }
 
 fn output_schema() -> Value {
@@ -196,8 +223,11 @@ Reconstruct the day's accomplishments as achievements a developer would be proud
 
 Return only the structured output."#;
 
-pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -> Result<EvalResult> {
-    let mut cmd = claude_command(settings)?;
+pub fn evaluate_day(
+    settings: &Settings,
+    day: &str,
+    sessions: &[SessionFacts],
+) -> Result<EvalResult> {
     let run_dir = store::data_dir().join("eval").join(format!(
         "{}-{}",
         day,
@@ -212,42 +242,28 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
 
     let schema = serde_json::to_string(&output_schema())?;
     let budget = format!("{:.2}", MAX_BUDGET_USD);
-    let mut args: Vec<&str> = vec![
-        "-p",
+    let mut cmd = structured_command(
+        settings,
         EVALUATOR_PROMPT,
-        "--model",
-        EVAL_MODEL,
-        "--effort",
-        EVAL_EFFORT,
-        "--output-format",
-        "json",
-        "--json-schema",
         &schema,
-        "--tools",
         "Read,Grep,Glob",
-        "--disallowedTools",
         "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
-        "--no-session-persistence",
-        "--setting-sources",
-        "",
-    ];
+    )?;
+    cmd.args(["--effort", EVAL_EFFORT]);
     if settings.cost_limit_enabled {
-        args.push("--max-budget-usd");
-        args.push(&budget);
+        cmd.args(["--max-budget-usd", &budget]);
     }
     let mut child = cmd
         .current_dir(&run_dir)
-        .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null())
         .spawn()
         .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
 
     let started = Instant::now();
-    let status = loop {
+    loop {
         match child.try_wait()? {
-            Some(status) => break status,
+            Some(_) => break,
             None => {
                 if started.elapsed() > EVAL_TIMEOUT {
                     let _ = child.kill();
@@ -257,16 +273,10 @@ pub fn evaluate_day(settings: &Settings, day: &str, sessions: &[SessionFacts]) -
                 std::thread::sleep(Duration::from_millis(500));
             }
         }
-    };
+    }
     let out = child.wait_with_output()?;
     let _ = std::fs::remove_dir_all(&run_dir);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-
-    if !status.success() {
-        bail!("{}", classify_failure(&stdout, &stderr));
-    }
-    let v = parse_run_json(&stdout, &stderr)?;
+    let v = decode_run_output(&out)?;
     let structured = v
         .get("structured_output")
         .cloned()
@@ -300,7 +310,6 @@ Rewrite them as a single achievement. Title: short, specific, outcome-first, max
 
 Use only what the cards state. Do not invent outcomes, do not add detail that is not present, and do not describe anything as verified or shipped unless a card already does. Return only the structured output."#;
 
-/// Prose only: outcomes carry across a merge untouched, so no evidence package and no tools.
 pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result<(String, String)> {
     let cards: Vec<Value> = parts
         .iter()
@@ -319,33 +328,16 @@ pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result
         "required": ["title", "contribution"]
     }))?;
 
-    let out = claude_command(settings)?
-        .args([
-            "-p",
-            &input,
-            "--model",
-            EVAL_MODEL,
-            "--output-format",
-            "json",
-            "--json-schema",
-            &schema,
-            "--tools",
-            "",
-            "--disallowedTools",
-            "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task",
-            "--no-session-persistence",
-            "--setting-sources",
-            "",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() {
-        bail!("{}", classify_failure(&stdout, &stderr));
-    }
-    let v = parse_run_json(&stdout, &stderr)?;
+    let out = structured_command(
+        settings,
+        &input,
+        &schema,
+        "",
+        "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task",
+    )?
+    .output()
+    .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
+    let v = decode_run_output(&out)?;
     let s = v
         .get("structured_output")
         .ok_or_else(|| anyhow!("merge rewrite returned no structured output"))?;
@@ -359,10 +351,23 @@ pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result
     Ok((title.trim().to_string(), contribution.trim().to_string()))
 }
 
-/// Rejects in-band failures, which exit 0 with "is_error": true.
+fn decode_run_output(out: &Output) -> Result<Value> {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        bail!("{}", classify_failure(&stdout, &stderr));
+    }
+    parse_run_json(&stdout, &stderr)
+}
+
+// Claude can report in-band failures with a successful process exit.
 fn parse_run_json(stdout: &str, stderr: &str) -> Result<Value> {
-    let v: Value = serde_json::from_str(stdout.trim())
-        .map_err(|_| anyhow!("unexpected evaluator output (not JSON): {}", excerpt(stdout)))?;
+    let v: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
+        anyhow!(
+            "unexpected evaluator output (not JSON): {}",
+            excerpt(stdout)
+        )
+    })?;
     if v["is_error"].as_bool() == Some(true) {
         bail!("{}", classify_failure(stdout, stderr));
     }
@@ -370,8 +375,7 @@ fn parse_run_json(stdout: &str, stderr: &str) -> Result<Value> {
 }
 
 fn excerpt(s: &str) -> String {
-    let t: String = s.chars().take(300).collect();
-    t
+    s.chars().take(300).collect()
 }
 
 fn classify_failure(stdout: &str, stderr: &str) -> String {
@@ -463,7 +467,9 @@ mod tests {
 
     #[test]
     fn only_api_key_auth_is_metered() {
-        assert!(auth_is_metered(r#"{"loggedIn":true,"authMethod":"api-key"}"#));
+        assert!(auth_is_metered(
+            r#"{"loggedIn":true,"authMethod":"api-key"}"#
+        ));
         assert!(!auth_is_metered(
             r#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"team"}"#
         ));

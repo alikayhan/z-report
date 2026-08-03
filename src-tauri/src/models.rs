@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::hash::Hash;
 
 pub const LEVEL_LABELS: [&str; 5] = [
     "Work observed",
@@ -49,8 +50,6 @@ impl SessionFacts {
             || self.external_changes().next().is_some()
     }
 
-    /// The only external actions that are evidence. Reads are how the work got
-    /// done, not what it produced, so nothing downstream should see them.
     pub fn external_changes(&self) -> impl Iterator<Item = &ExternalAction> {
         self.external_actions.iter().filter(|a| a.mutating)
     }
@@ -82,8 +81,6 @@ pub struct ExternalAction {
     pub server: String,
     pub tool: String,
     pub ok: bool,
-    /// Guessed from the tool name, so it is recorded rather than filtered on:
-    /// a better guess later can reclassify calls already parsed.
     pub mutating: bool,
     pub ts: Option<String>,
     #[serde(default)]
@@ -134,21 +131,26 @@ impl PrLink {
         safe(owner)
             && safe(repo)
             && self.number > 0
-            && self.url
-                == format!(
-                    "https://github.com/{}/{}/pull/{}",
-                    owner, repo, self.number
-                )
+            && self.url == format!("https://github.com/{}/{}/pull/{}", owner, repo, self.number)
     }
 }
 
-pub fn unique_pr_links<'a>(links: impl IntoIterator<Item = &'a PrLink>) -> Vec<PrLink> {
+pub(crate) fn unique_by<T, K>(
+    items: impl IntoIterator<Item = T>,
+    mut key: impl FnMut(&T) -> K,
+) -> Vec<T>
+where
+    K: Eq + Hash,
+{
     let mut seen = HashSet::new();
-    links
+    items
         .into_iter()
-        .filter(|pr| seen.insert(pr.url.as_str()))
-        .cloned()
+        .filter(|item| seen.insert(key(item)))
         .collect()
+}
+
+pub fn unique_pr_links<'a>(links: impl IntoIterator<Item = &'a PrLink>) -> Vec<PrLink> {
+    unique_by(links.into_iter().cloned(), |pr| pr.url.clone())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,14 +162,19 @@ pub struct Outcome {
     pub verified: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RelatedKind {
+    Continuation,
+    Journaled,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelatedLink {
-    /// "continuation" for a pending candidate, "journaled" for an approved entry.
-    pub kind: String,
+    pub kind: RelatedKind,
     pub target_id: String,
     pub target_title: String,
     pub target_day: String,
-    pub score: f64,
     #[serde(default)]
     pub pair_key: String,
 }
@@ -204,6 +211,24 @@ impl Candidate {
 impl JournalEntry {
     pub fn day_end(&self) -> &str {
         self.day_end.as_deref().unwrap_or(&self.day)
+    }
+
+    pub fn from_candidate(candidate: &Candidate, approved_at: String, edited: bool) -> Self {
+        Self {
+            id: format!("j-{}", candidate.id),
+            day: candidate.day.clone(),
+            day_end: candidate.day_end.clone(),
+            title: candidate.title.clone(),
+            contribution: candidate.contribution.clone(),
+            outcomes: candidate.outcomes.clone(),
+            evidence_level: candidate.evidence_level,
+            session_ids: candidate.session_ids.clone(),
+            pr_links: candidate.pr_links.clone(),
+            repo: candidate.repo.clone(),
+            model: candidate.model.clone(),
+            approved_at,
+            edited,
+        }
     }
 }
 

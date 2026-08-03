@@ -1,5 +1,3 @@
-// Fixture backend for running the UI in a plain browser (npm run dev outside Tauri).
-
 import type { Candidate, EvalRun, JournalEntry, Overview, Settings } from "./api";
 
 const today = new Date().toISOString().slice(0, 10);
@@ -16,7 +14,6 @@ const candidates: Candidate[] = [
       target_id: "c2",
       target_title: "Mapped the workout-sync pipeline ahead of the offline rewrite",
       target_day: yesterday,
-      score: 0.34,
       pair_key: "s1,s2~s3",
     },
     title: "Fixed flaky auth-token refresh test that blocked CI",
@@ -139,11 +136,9 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
     case "overview":
       return respond({
         pending: candidates.length,
-        journal_count: journal.length,
         session_count: 12,
         evaluating: false,
         last_scan_at: new Date().toISOString(),
-        last_zread_day: null,
         zread_time: settings.zread_time,
         today,
         model: "claude-opus-5",
@@ -151,17 +146,18 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         metered: false,
       } satisfies Overview);
     case "candidates":
-      return respond((args?.status === "discarded" ? discarded : candidates).filter((c) => true));
+      return respond(args?.status === "discarded" ? discarded : candidates);
     case "journal":
       return respond(journal);
     case "eval_runs":
       return respond(runs);
     case "get_settings":
       return respond(settings);
-    case "export_markdown":
-      return respond(
-        `# Z Report — ${today}\n\n### Shipped incremental transcript ingestion\n_Committed_\n\nBuilt discovery, extraction, and verification.\n\n- ✓ cargo test passes _(Locally verified)_\n- ✓ Committed on main _(Committed)_\n`
-      );
+    case "export_data":
+      return respond({
+        markdown: `# Z Report — ${today}\n\n### Shipped incremental transcript ingestion\n_Committed_\n\nBuilt discovery, extraction, and verification.\n\n- ✓ cargo test passes _(Locally verified)_\n- ✓ Committed on main _(Committed)_\n`,
+        entries: journal,
+      });
     default:
       return respond(null);
   }
