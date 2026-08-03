@@ -1,7 +1,3 @@
-/* Z Report — "till roll" design system, window edition.
-   Register housing is the window chrome; each achievement is a thermal-paper
-   receipt on the counter. */
-
 :root {
   --housing: #101612;
   --housing-side: #131a15;
@@ -81,18 +77,12 @@ textarea:focus-visible {
   border: 2px solid var(--housing);
 }
 
-/* ---------- window frame ---------- */
-
-/* minmax(0, 1fr) rows pin panes to the viewport so inner scrollers engage;
-   an auto row would grow with content and silently clip instead. */
 #app {
   display: grid;
   grid-template-columns: 224px 1fr;
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
 }
-
-/* ---------- sidebar ---------- */
 
 #side {
   display: flex;
@@ -105,7 +95,7 @@ textarea:focus-visible {
 
 .drag-strip {
   flex: none;
-  height: 38px; /* clearance for the native traffic lights */
+  height: 38px;
   margin: 0 -12px;
 }
 
@@ -227,8 +217,6 @@ textarea:focus-visible {
   padding: 0 10px;
 }
 
-/* ---------- main / views ---------- */
-
 #main {
   min-width: 0;
   min-height: 0;
@@ -279,14 +267,11 @@ textarea:focus-visible {
   overflow-y: auto;
 }
 
-/* the dark felt the paper sits on */
 .receipt-scroll,
 .roll-scroll,
 .export-scroll {
   background: var(--counter);
 }
-
-/* ---------- queue list ---------- */
 
 .pane-list {
   display: flex;
@@ -452,9 +437,6 @@ textarea:focus-visible {
   letter-spacing: 0.06em;
   z-index: 5;
 }
-#merge-bar[hidden] {
-  display: none;
-}
 #merge-bar .spacer {
   flex: 1;
 }
@@ -488,8 +470,6 @@ textarea:focus-visible {
 .key-ink.danger:hover {
   background: rgba(178, 58, 50, 0.08);
 }
-
-/* ---------- counter + receipt ---------- */
 
 .pane-detail {
   position: relative;
@@ -756,8 +736,6 @@ hr.dash {
   font-variant-numeric: tabular-nums;
 }
 
-/* edit mode */
-
 .edit-field {
   width: 100%;
   font-family: var(--sans);
@@ -786,8 +764,6 @@ input.edit-field.title {
   padding: 0 4px;
   flex: none;
 }
-
-/* stamp */
 
 .stamp-overlay {
   position: absolute;
@@ -821,8 +797,6 @@ input.edit-field.title {
   65% { opacity: 1; transform: scale(0.94) rotate(-9deg); }
   100% { opacity: 1; transform: scale(1) rotate(-11deg); }
 }
-
-/* register keys */
 
 .actionbar {
   position: absolute;
@@ -908,15 +882,20 @@ input.edit-field.title {
   line-height: 1.6;
 }
 
-/* ---------- journal roll ---------- */
+.pane-head input[type="search"],
+.range-inputs input[type="date"],
+.setting-row input[type="time"],
+.setting-row input[type="number"],
+textarea.repos {
+  background: rgba(247, 242, 230, 0.06);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
 
 .pane-head input[type="search"] {
   flex: 1;
   max-width: 340px;
-  background: rgba(247, 242, 230, 0.06);
-  border: 1px solid var(--line-strong);
   border-radius: 8px;
-  color: var(--text);
   font-family: var(--sans);
   font-size: 12px;
   letter-spacing: normal;
@@ -1045,8 +1024,6 @@ input.edit-field.title {
   user-select: text;
 }
 
-/* ---------- export ---------- */
-
 .export-scroll {
   padding: 36px 40px 60px;
 }
@@ -1109,10 +1086,6 @@ input.edit-field.title {
   color: var(--ink);
 }
 
-.range-inputs[hidden] {
-  display: none;
-}
-
 .range-inputs {
   display: flex;
   gap: 8px;
@@ -1123,10 +1096,7 @@ input.edit-field.title {
   color: var(--text-dim);
 }
 .range-inputs input[type="date"] {
-  background: rgba(247, 242, 230, 0.06);
-  border: 1px solid var(--line-strong);
   border-radius: 7px;
-  color: var(--text);
   font-family: var(--mono);
   font-size: 11px;
   padding: 5px 7px;
@@ -1184,8 +1154,6 @@ input.edit-field.title {
   user-select: text;
 }
 
-/* ---------- settings ---------- */
-
 .settings-scroll {
   padding: 36px 40px 60px;
 }
@@ -1218,10 +1186,7 @@ input.edit-field.title {
 
 .setting-row input[type="time"],
 .setting-row input[type="number"] {
-  background: rgba(247, 242, 230, 0.06);
-  border: 1px solid var(--line-strong);
   border-radius: 7px;
-  color: var(--text);
   font-family: var(--mono);
   font-size: 12px;
   padding: 5px 8px;
@@ -1238,10 +1203,7 @@ input.edit-field.title {
 textarea.repos {
   width: 100%;
   min-height: 52px;
-  background: rgba(247, 242, 230, 0.06);
-  border: 1px solid var(--line-strong);
   border-radius: 7px;
-  color: var(--text);
   font-family: var(--mono);
   font-size: 11.5px;
   padding: 7px 9px;
@@ -1293,8 +1255,6 @@ textarea.repos {
   color: var(--red-bright);
 }
 
-/* ---------- toast ---------- */
-
 #toast {
   position: fixed;
   left: 50%;
@@ -1313,9 +1273,6 @@ textarea.repos {
   text-align: center;
   animation: toast-in 0.22s ease-out;
 }
-#toast[hidden] {
-  display: none;
-}
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -1323,7 +1280,9 @@ textarea.repos {
   }
 }
 
-/* ---------- a11y ---------- */
+[hidden] {
+  display: none !important;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -27,7 +27,6 @@ export interface RelatedLink {
   target_id: string;
   target_title: string;
   target_day: string;
-  score: number;
   pair_key: string;
 }
 
@@ -94,11 +93,9 @@ export interface Settings {
 
 export interface Overview {
   pending: number;
-  journal_count: number;
   session_count: number;
   evaluating: boolean;
   last_scan_at: string | null;
-  last_zread_day: string | null;
   zread_time: string;
   today: string;
   model: string;
@@ -106,9 +103,13 @@ export interface Overview {
   metered: boolean;
 }
 
+export interface ExportData {
+  markdown: string;
+  entries: JournalEntry[];
+}
+
 export const api = {
   overview: () => invoke<Overview>("overview"),
-  scanNow: () => invoke<number>("scan_now"),
   runXread: () => invoke<void>("run_xread"),
   candidates: (status: string) => invoke<Candidate[]>("candidates", { status }),
   updateCandidate: (id: string, title: string, contribution: string, outcomes: Outcome[]) =>
@@ -122,7 +123,7 @@ export const api = {
     invoke<JournalEntry[]>("journal", { from, to, query: query ?? null }),
   confirmImpact: (id: string, note: string) => invoke<void>("confirm_impact", { id, note }),
   deleteJournalEntry: (id: string) => invoke<void>("delete_journal_entry", { id }),
-  exportMarkdown: (from: string, to: string) => invoke<string>("export_markdown", { from, to }),
+  exportData: (from: string, to: string) => invoke<ExportData>("export_data", { from, to }),
   writeFile: (path: string, content: string) => invoke<void>("write_file", { path, content }),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
