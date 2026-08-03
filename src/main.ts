@@ -120,6 +120,8 @@ function relTime(iso: string | null): string {
   return hours < 24 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
 }
 
+/* ---------- sidebar ---------- */
+
 function renderSidebar() {
   const o = state.overview;
   const badge = $("#badge");
@@ -139,6 +141,8 @@ function renderSidebar() {
   $("#side-status").innerHTML = rows.join("");
   $("#evaluating").hidden = !o?.evaluating;
 }
+
+/* ---------- review: queue list ---------- */
 
 function meter(l: number): string {
   const n = Math.min(Math.max(l, 1), 5);
@@ -196,6 +200,8 @@ function updateMergeBar() {
   bar.hidden = state.selection.size < 2;
   if (!bar.hidden) $("#merge-count").textContent = `${state.selection.size} selected`;
 }
+
+/* ---------- review: receipt ---------- */
 
 function barcode(): string {
   const widths = [2, 1, 3, 1, 2, 4, 1, 2, 1, 3, 2, 1, 4, 2, 1, 3, 1, 2, 4, 1, 2, 3, 1, 2, 4, 1, 2, 3, 1];
@@ -400,6 +406,8 @@ function nextAfter(id: string): string | null {
   return state.pending[i + 1]?.id ?? state.pending[i - 1]?.id ?? null;
 }
 
+/* ---------- journal ---------- */
+
 function entryMarkdown(e: JournalEntry): string {
   let md = `### ${e.title}\n_${levelLabel(e.evidence_level)}_\n\n${e.contribution}\n\n`;
   md += e.outcomes.map((o) => `- ${o.verified ? "✓" : "△"} ${o.claim} _(${levelLabel(o.evidence_level)})_`).join("\n");
@@ -470,6 +478,8 @@ async function loadJournal() {
   state.journal = await api.journal("1970-01-01", todayStr(), state.journalQuery || undefined);
 }
 
+/* ---------- export ---------- */
+
 const PRESETS: [typeof state.exportPreset, string][] = [
   ["today", "Today"],
   ["week", "This week"],
@@ -530,6 +540,8 @@ async function loadExport() {
     state.exportEntries = [];
   }
 }
+
+/* ---------- settings ---------- */
 
 function renderSettings() {
   const s = state.settings;
@@ -645,6 +657,8 @@ function renderRuns(runs: EvalRun[], metered: boolean): string {
   </table>${metered ? "" : `<p class="setting-hint">Runs are included in your Claude subscription — no per-run charge.</p>`}`;
 }
 
+/* ---------- actions ---------- */
+
 function resolveSelected(label: string, red: boolean, act: (id: string) => Promise<void>, msg: string) {
   const c = selected();
   if (!c || editing()) return;
@@ -732,6 +746,8 @@ async function handleAct(act: string, target: HTMLElement) {
   }
 }
 
+/* ---------- data loading ---------- */
+
 async function loadReview() {
   const [pending, discarded] = await Promise.all([
     api.candidates("pending"),
@@ -797,6 +813,8 @@ async function switchView(view: View) {
   await loadView(view);
   render();
 }
+
+/* ---------- boot ---------- */
 
 function handleActionEvent(e: Event) {
   const actEl = (e.target as HTMLElement).closest<HTMLElement>("[data-act]");

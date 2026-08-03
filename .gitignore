@@ -1,8 +1,10 @@
+# macOS
 .DS_Store
 ._*
 .Spotlight-V100
 .Trashes
 
+# secrets
 .env
 .env.*
 !.env.example
@@ -12,32 +14,39 @@
 credentials*.json
 secrets*
 
+# IDE and local tooling state
 .vscode/
 .idea/
 *.swp
 *~
 .gstack/
 
+# logs and scratch
 *.log
 tmp/
 scratch/
 
+# node
 node_modules/
 npm-debug.log*
 yarn-error.log*
 
+# rust / tauri build output
 src-tauri/target/
 src-tauri/gen/schemas/
 dist/
 
+# local databases (app data lives in ~/Library/Application Support/com.zreport.app)
 *.db
 *.sqlite*
 *.db-journal
 *.db-wal
 *.db-shm
 
+# regenerable design artifacts (rebuild: rsvg-convert design/app-icon.svg + npx tauri icon)
 design/app-icon-1024.png
 
+# generated icon sets for platforms this app doesn't target
 src-tauri/icons/android/
 src-tauri/icons/ios/
 src-tauri/icons/Square*.png
