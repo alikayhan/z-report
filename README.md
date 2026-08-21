@@ -123,15 +123,18 @@ the entry, instead of quietly appearing as a second copy of something you have r
 ## Privacy and network boundary
 
 - All product data (evidence, candidates, journal, settings) lives in
-  `~/Library/Application Support/com.zreport.app/` — SQLite, no accounts, no sync.
+  `~/Library/Application Support/com.alikayhan.zreport/` — SQLite, no accounts, no sync.
 - Z Report has **no backend, no analytics, and no telemetry**.
-- The one thing that leaves your Mac: each evaluation runs `claude -p` on **your own
-  Claude Code account**, sending the prepared evidence package (session excerpts,
-  file paths, command results including those from delegated sub-sessions, the names of
-  external tools used to change something, commit and pull request metadata) to
-  Anthropic — the same boundary as using Claude Code itself. This is disclosed in
-  Settings. Arguments passed to external tools are never included, only the server and
-  tool name.
+- Two things leave your Mac, and nothing else:
+  1. Each evaluation runs `claude -p` on **your own Claude Code account**, sending the
+     prepared evidence package (session excerpts, file paths, command results including
+     those from delegated sub-sessions, the names of external tools used to change
+     something, commit and pull request metadata) to Anthropic — the same boundary as
+     using Claude Code itself. This is disclosed in Settings. Arguments passed to
+     external tools are never included, only the server and tool name.
+  2. The updater asks GitHub for the latest release metadata about once a day.
+     The request carries nothing about you or your work, and updates only install with
+     your confirmation — never while an evaluation is running.
 - The evaluator is sandboxed: fresh ephemeral run, read-only tool allowlist
   (`Read,Grep,Glob`), working directory containing only the evidence package,
   no session persistence, no user settings, and an optional per-run safety cap.
@@ -154,6 +157,43 @@ npm run tauri build    # release bundle (.app + .dmg)
 
 The UI can be developed without Tauri: `npm run dev` serves it in a browser against
 fixture data (`src/mock.ts`).
+
+## Releasing
+
+The version lives only in `src-tauri/Cargo.toml` — `package.json` and `tauri.conf.json`
+deliberately carry none, so nothing can drift — and the release workflow fails unless
+the pushed tag matches it. Bump the version, run `cargo check` so `Cargo.lock` follows,
+then tag:
+
+```sh
+git tag -a v0.2.0 -m "What changed, shown as release notes in-app"
+git push origin v0.2.0
+```
+
+The tag triggers `.github/workflows/release.yml`, which tests, builds
+`aarch64-apple-darwin`, signs, notarizes, and staples the app and DMG, and publishes the
+DMG, updater archive (`.app.tar.gz` + `.sig`), `latest.json`, and `checksums.txt` to the
+public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository.
+Installed apps discover the release through `latest.json`; Homebrew users get it once
+`Casks/z-report.rb` in [homebrew-tap](https://github.com/alikayhan/homebrew-tap) is
+bumped — the workflow's run summary includes a paste-ready Cask rendered from
+`packaging/homebrew/` with the new version and DMG SHA-256 filled in.
+
+Required GitHub Actions secrets:
+
+| Secret | Contents |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Developer ID Application certificate, base64-encoded `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password of the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
+| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Notarization: Apple ID, app-specific password, team ID |
+| `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/z-report.key` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password (empty if none) |
+| `RELEASE_REPO_TOKEN` | Fine-grained PAT with contents write on `z-report-releases` |
+
+The updater private key exists only in `~/.tauri/z-report.key` and the CI secret. Back it
+up somewhere durable: shipped apps embed the public key and will reject updates signed by
+any other key, so losing it strands every installed copy on its current version.
 
 ## Evaluator contract (validated)
 
