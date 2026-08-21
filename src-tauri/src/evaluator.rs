@@ -1,3 +1,4 @@
+use crate::lifecycle::ClaudeGuard;
 use crate::models::*;
 use crate::store;
 use anyhow::{anyhow, bail, Result};
@@ -225,6 +226,7 @@ Return only the structured output."#;
 
 pub fn evaluate_day(
     settings: &Settings,
+    _claude: &ClaudeGuard,
     day: &str,
     sessions: &[SessionFacts],
 ) -> Result<EvalResult> {
@@ -310,7 +312,11 @@ Rewrite them as a single achievement. Title: short, specific, outcome-first, max
 
 Use only what the cards state. Do not invent outcomes, do not add detail that is not present, and do not describe anything as verified or shipped unless a card already does. Return only the structured output."#;
 
-pub fn rewrite_merged(settings: &Settings, parts: &[(String, String)]) -> Result<(String, String)> {
+pub fn rewrite_merged(
+    settings: &Settings,
+    _claude: &ClaudeGuard,
+    parts: &[(String, String)],
+) -> Result<(String, String)> {
     let cards: Vec<Value> = parts
         .iter()
         .map(|(title, contribution)| json!({ "title": title, "contribution": contribution }))

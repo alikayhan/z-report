@@ -4,12 +4,14 @@ pub mod evaluator;
 pub mod export;
 pub mod gitfacts;
 pub mod ingest;
+pub mod lifecycle;
 pub mod models;
 pub mod pipeline;
 pub mod related;
 mod scheduler;
 pub mod store;
 mod text;
+mod updater;
 
 use pipeline::AppState;
 use std::sync::atomic::AtomicBool;
@@ -78,14 +80,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let store = store::Store::open_default()?;
             app.manage(AppState {
                 store: Mutex::new(store),
-                evaluating: AtomicBool::new(false),
+                lifecycle: lifecycle::Lifecycle::default(),
                 claude_found: AtomicBool::new(false),
                 metered: Mutex::new(None),
             });
+            app.manage(updater::UpdaterState::default());
 
             let detect = app.handle().clone();
             std::thread::spawn(move || {
@@ -160,6 +164,9 @@ pub fn run() {
             commands::set_settings,
             commands::eval_runs,
             commands::delete_all_data,
+            commands::check_for_updates,
+            commands::install_update,
+            commands::restart_app,
         ])
         .build(tauri::generate_context!())
         .expect("error while running Z Report")
