@@ -11,7 +11,7 @@ pub struct Store {
 pub fn data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("com.zreport.app")
+        .join("com.alikayhan.zreport")
 }
 
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
