@@ -186,7 +186,9 @@ Required GitHub Actions secrets:
 | `APPLE_CERTIFICATE` | Developer ID Application certificate, base64-encoded `.p12` |
 | `APPLE_CERTIFICATE_PASSWORD` | Password of the `.p12` |
 | `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
-| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | Notarization: Apple ID, app-specific password, team ID |
+| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
+| `APPLE_API_KEY` | App Store Connect API key ID |
+| `APPLE_API_KEY_CONTENT` | Contents of the App Store Connect `AuthKey_*.p8` file |
 | `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/z-report.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password (empty if none) |
 | `RELEASE_REPO_TOKEN` | Fine-grained PAT with contents write on `z-report-releases` |
