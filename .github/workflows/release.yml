@@ -101,6 +101,9 @@ jobs:
           spctl --assess --type execute --verbose=4 "$APP"
 
       - name: Notarize, staple, and verify DMG
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           set -euo pipefail
           DMG=$(ls "$BUNDLE_DIR"/dmg/*.dmg)
