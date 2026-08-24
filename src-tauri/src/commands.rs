@@ -250,9 +250,11 @@ pub fn set_settings(state: State<AppState>, settings: Settings) -> CmdResult<()>
         path_changed
     };
     if path_changed {
-        let (found, metered) = evaluator::probe_status(&settings);
-        state.claude_found.store(found, Ordering::SeqCst);
-        *state.metered.lock().unwrap() = Some(metered);
+        if let Some(busy) = state.lifecycle.begin_probe() {
+            let (found, metered) = evaluator::probe_status(&settings, &busy);
+            state.claude_found.store(found, Ordering::SeqCst);
+            *state.metered.lock().unwrap() = Some(metered);
+        }
     }
     Ok(())
 }

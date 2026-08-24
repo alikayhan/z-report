@@ -83,18 +83,25 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let store = store::Store::open_default()?;
+            let cached_update = store
+                .kv_get("available_update")
+                .and_then(|value| serde_json::from_str(&value).ok());
             app.manage(AppState {
                 store: Mutex::new(store),
                 lifecycle: lifecycle::Lifecycle::default(),
                 claude_found: AtomicBool::new(false),
                 metered: Mutex::new(None),
             });
-            app.manage(updater::UpdaterState::default());
+            app.manage(updater::UpdaterState::new(cached_update));
 
             let detect = app.handle().clone();
             std::thread::spawn(move || {
-                let settings = detect.state::<AppState>().store.lock().unwrap().settings();
-                let (found, metered) = evaluator::probe_status(&settings);
+                let state = detect.state::<AppState>();
+                let Some(busy) = state.lifecycle.begin_probe() else {
+                    return;
+                };
+                let settings = state.store.lock().unwrap().settings();
+                let (found, metered) = evaluator::probe_status(&settings, &busy);
                 detect
                     .state::<AppState>()
                     .claude_found

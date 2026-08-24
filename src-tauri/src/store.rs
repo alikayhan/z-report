@@ -148,6 +148,11 @@ impl Store {
         Ok(())
     }
 
+    pub fn kv_delete(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM kv WHERE key=?1", [key])?;
+        Ok(())
+    }
+
     pub fn settings(&self) -> Settings {
         self.kv_get("settings")
             .and_then(|s| serde_json::from_str(&s).ok())

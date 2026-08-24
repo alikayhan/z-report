@@ -38,11 +38,10 @@ fn tick(app: &AppHandle) {
     }
 
     if elapsed(last_update_check, chrono::Duration::hours(24)) {
-        {
+        if updater::scheduled_check(app).is_ok() {
             let store = state.store.lock().unwrap();
             let _ = store.kv_set("last_update_check_at", &now.to_rfc3339());
         }
-        updater::scheduled_check(app);
     }
 
     let today = pipeline::today();

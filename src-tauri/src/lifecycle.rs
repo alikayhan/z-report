@@ -34,6 +34,14 @@ impl Lifecycle {
     }
 
     pub fn begin_rewrite(&self) -> Option<ClaudeGuard> {
+        self.begin_claude_process()
+    }
+
+    pub fn begin_probe(&self) -> Option<ClaudeGuard> {
+        self.begin_claude_process()
+    }
+
+    fn begin_claude_process(&self) -> Option<ClaudeGuard> {
         let mut busy = self.0.lock().unwrap();
         if busy.updating {
             return None;
@@ -113,6 +121,7 @@ mod tests {
         let update = l.begin_update().unwrap();
         assert!(l.begin_evaluation().is_none());
         assert!(l.begin_rewrite().is_none());
+        assert!(l.begin_probe().is_none());
         assert!(l.begin_update().is_err());
         drop(update);
         assert!(l.begin_rewrite().is_some());

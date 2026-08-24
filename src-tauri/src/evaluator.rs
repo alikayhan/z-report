@@ -89,7 +89,7 @@ fn structured_command(
 }
 
 // Only confirmed API-key auth is metered; subscription cost values are estimates.
-pub fn probe_status(settings: &Settings) -> (bool, bool) {
+pub fn probe_status(settings: &Settings, _claude: &ClaudeGuard) -> (bool, bool) {
     let Ok(mut cmd) = claude_command(settings) else {
         return (false, false);
     };
