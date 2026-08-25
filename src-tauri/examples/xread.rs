@@ -23,7 +23,9 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let result = evaluator::evaluate_day(&settings, &day, &sessions)?;
+    let lifecycle = z_report_lib::lifecycle::Lifecycle::default();
+    let claude = lifecycle.begin_evaluation().unwrap();
+    let result = evaluator::evaluate_day(&settings, &claude, &day, &sessions)?;
     eprintln!(
         "served by {} — ${:.2}, {} turns, {:.0}s",
         result.model.as_deref().unwrap_or("?"),

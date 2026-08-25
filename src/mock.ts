@@ -144,6 +144,9 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         model: "claude-opus-5",
         claude_found: true,
         metered: false,
+        app_version: "0.1.0",
+        update: null,
+        update_ready: false,
       } satisfies Overview);
     case "candidates":
       return respond(args?.status === "discarded" ? discarded : candidates);

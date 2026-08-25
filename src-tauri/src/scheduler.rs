@@ -1,4 +1,5 @@
 use crate::pipeline::{self, AppState};
+use crate::updater;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
@@ -11,25 +12,36 @@ pub fn spawn(app: AppHandle) {
 
 fn tick(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let (settings, last_scan, last_zread_day) = {
+    let (settings, last_scan, last_zread_day, last_update_check) = {
         let store = state.store.lock().unwrap();
         (
             store.settings(),
             store.kv_get("last_scan_at"),
             store.kv_get("last_zread_day"),
+            store.kv_get("last_update_check_at"),
         )
     };
 
     let now = chrono::Local::now();
-    let scan_due = last_scan
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-        .map(|t| {
-            now.signed_duration_since(t.with_timezone(&chrono::Local))
-                >= chrono::Duration::minutes(settings.scan_interval_min.max(1) as i64)
-        })
-        .unwrap_or(true);
-    if scan_due {
+    let elapsed = |stamp: Option<String>, min: chrono::Duration| {
+        stamp
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|t| now.signed_duration_since(t.with_timezone(&chrono::Local)) >= min)
+            .unwrap_or(true)
+    };
+
+    if elapsed(
+        last_scan,
+        chrono::Duration::minutes(settings.scan_interval_min.max(1) as i64),
+    ) {
         let _ = pipeline::scan(app);
+    }
+
+    if elapsed(last_update_check, chrono::Duration::hours(24)) {
+        if updater::scheduled_check(app).is_ok() {
+            let store = state.store.lock().unwrap();
+            let _ = store.kv_set("last_update_check_at", &now.to_rfc3339());
+        }
     }
 
     let today = pipeline::today();

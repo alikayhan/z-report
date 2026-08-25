@@ -11,7 +11,7 @@ pub struct Store {
 pub fn data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("com.zreport.app")
+        .join("com.alikayhan.zreport")
 }
 
 fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
@@ -145,6 +145,11 @@ impl Store {
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![key, value],
         )?;
+        Ok(())
+    }
+
+    pub fn kv_delete(&self, key: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM kv WHERE key=?1", [key])?;
         Ok(())
     }
 

@@ -26,6 +26,8 @@ const state = {
   settings: null as Settings | null,
   evalRuns: [] as EvalRun[],
   lastError: "",
+  updateBusy: false,
+  updateProgress: null as { downloaded: number; total: number | null } | null,
 };
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -600,6 +602,16 @@ function renderSettings() {
     </div>
 
     <div class="settings-section">
+      <h3>Updates</h3>
+      <div class="setting-row">
+        <label>Version</label>
+        <span style="font-family:var(--mono);font-size:11px">${esc(o?.app_version ?? "")}</span>
+      </div>
+      ${renderUpdateRow(o)}
+      <p class="setting-hint">Z Report asks GitHub for the latest release about once a day — the check sends nothing about you or your work. An update never installs while an evaluation is running.</p>
+    </div>
+
+    <div class="settings-section">
       <h3>Recent evaluations</h3>
       ${renderRuns(state.evalRuns, metered)}
     </div>
@@ -629,6 +641,37 @@ function renderSettings() {
     (state.settings!.excluded_repos = v.split("\n").map((l) => l.trim()).filter(Boolean))
   );
   bind("set-cost-limit", (v) => (state.settings!.cost_limit_enabled = v === "true"));
+}
+
+function progressText(p: { downloaded: number; total: number | null } | null): string {
+  if (!p) return "downloading…";
+  if (p.total) return `${Math.min(100, Math.round((p.downloaded / p.total) * 100))}%`;
+  return `${(p.downloaded / 1048576).toFixed(1)} MB`;
+}
+
+function renderUpdateRow(o: Overview | null): string {
+  if (o?.update_ready) {
+    return `<div class="setting-row">
+      <label>Update installed — restart to finish</label>
+      <button class="key-ink violet" data-act="restart-app">Restart now</button>
+    </div>`;
+  }
+  if (state.updateBusy) {
+    return `<div class="setting-row">
+      <label>Installing version ${esc(o?.update?.version ?? "")}</label>
+      <span id="update-progress" style="font-family:var(--mono);font-size:11px">${progressText(state.updateProgress)}</span>
+    </div>`;
+  }
+  if (o?.update) {
+    return `<div class="setting-row">
+      <label>Version ${esc(o.update.version)} is available</label>
+      <button class="key-ink violet" data-act="install-update">Install update</button>
+    </div>${o.update.notes ? `<p class="setting-hint">${esc(o.update.notes)}</p>` : ""}`;
+  }
+  return `<div class="setting-row">
+    <label>You're on the latest version</label>
+    <button class="keycap" data-act="check-updates">Check for updates</button>
+  </div>`;
 }
 
 async function loadRuns() {
@@ -743,6 +786,36 @@ async function handleAct(act: string, target: HTMLElement) {
       render();
       break;
     }
+    case "check-updates": {
+      target.setAttribute("disabled", "");
+      try {
+        const info = await api.checkForUpdates();
+        if (state.overview) state.overview.update = info;
+        toast(info ? `Version ${info.version} is available` : "You're on the latest version");
+      } catch (e) {
+        toast(String(e));
+      }
+      renderSettings();
+      break;
+    }
+    case "install-update": {
+      state.updateBusy = true;
+      state.updateProgress = null;
+      renderSettings();
+      try {
+        await api.installUpdate();
+        toast("Update installed — restart when you're ready");
+      } catch (e) {
+        toast(String(e));
+      }
+      state.updateBusy = false;
+      await refreshOverview();
+      renderSettings();
+      break;
+    }
+    case "restart-app":
+      await api.restartApp();
+      break;
   }
 }
 
@@ -1028,6 +1101,11 @@ async function bindBackendEvents() {
     await listen<boolean>("zr:evaluating", (e) => {
       if (state.overview) state.overview.evaluating = e.payload;
       renderSidebar();
+    });
+    await listen<{ downloaded: number; total: number | null }>("zr:update-progress", (e) => {
+      state.updateProgress = e.payload;
+      const el = document.getElementById("update-progress");
+      if (el) el.textContent = progressText(e.payload);
     });
   }
 }

@@ -1,13 +1,14 @@
 use crate::models::*;
 use crate::pipeline::{self, AppState};
+use crate::updater::{self, UpdateInfo, UpdaterState};
 use crate::{evaluator, export, store};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 type CmdResult<T> = Result<T, String>;
 
-fn err<E: std::fmt::Display>(e: E) -> String {
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
@@ -22,6 +23,9 @@ pub struct Overview {
     pub model: String,
     pub claude_found: bool,
     pub metered: bool,
+    pub app_version: String,
+    pub update: Option<UpdateInfo>,
+    pub update_ready: bool,
 }
 
 #[derive(Serialize)]
@@ -31,7 +35,7 @@ pub struct ExportData {
 }
 
 #[tauri::command]
-pub fn overview(state: State<AppState>) -> CmdResult<Overview> {
+pub fn overview(app: AppHandle, state: State<AppState>) -> CmdResult<Overview> {
     let (pending, session_count, settings, last_scan_at) = {
         let store = state.store.lock().unwrap();
         let (pending, session_count) = store.overview_counts().map_err(err)?;
@@ -45,13 +49,16 @@ pub fn overview(state: State<AppState>) -> CmdResult<Overview> {
     Ok(Overview {
         pending,
         session_count,
-        evaluating: state.evaluating.load(Ordering::SeqCst),
+        evaluating: state.lifecycle.evaluating(),
         last_scan_at,
         zread_time: settings.zread_time,
         today: pipeline::today(),
         model: evaluator::EVAL_MODEL.into(),
         claude_found: state.claude_found.load(Ordering::SeqCst),
         metered: (*state.metered.lock().unwrap()).unwrap_or(false),
+        app_version: app.package_info().version.to_string(),
+        update: app.state::<UpdaterState>().info.lock().unwrap().clone(),
+        update_ready: app.state::<UpdaterState>().ready.load(Ordering::SeqCst),
     })
 }
 
@@ -243,9 +250,11 @@ pub fn set_settings(state: State<AppState>, settings: Settings) -> CmdResult<()>
         path_changed
     };
     if path_changed {
-        let (found, metered) = evaluator::probe_status(&settings);
-        state.claude_found.store(found, Ordering::SeqCst);
-        *state.metered.lock().unwrap() = Some(metered);
+        if let Some(busy) = state.lifecycle.begin_probe() {
+            let (found, metered) = evaluator::probe_status(&settings, &busy);
+            state.claude_found.store(found, Ordering::SeqCst);
+            *state.metered.lock().unwrap() = Some(metered);
+        }
     }
     Ok(())
 }
@@ -258,6 +267,21 @@ pub fn eval_runs(state: State<AppState>) -> CmdResult<Vec<EvalRun>> {
         .unwrap()
         .recent_eval_runs(20)
         .map_err(err)
+}
+
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle) -> CmdResult<Option<UpdateInfo>> {
+    updater::check(&app).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> CmdResult<()> {
+    updater::install(app).await
+}
+
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
 }
 
 #[tauri::command]
