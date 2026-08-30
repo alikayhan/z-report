@@ -1,14 +1,30 @@
-# Z Report
+<p align="center">
+  <img src="assets/app-icon.svg" width="128" alt="Z Report icon">
+</p>
 
-A local accomplishment journal for your Claude Code sessions. Z Report watches the
-session transcripts Claude Code already keeps on your Mac, evaluates each day's work on
-your own Claude Code account, and turns it into a reviewable journal of achievements you
-can export for standups, weekly updates, or performance reviews.
+<h1 align="center">Z Report</h1>
 
-This repository hosts release binaries and update metadata. Z Report runs on Apple
-Silicon Macs (macOS 13 or newer) and requires the
-[Claude Code CLI](https://claude.com/product/claude-code) — any install works (native
-installer, npm, or Homebrew).
+<p align="center"><em>Your Claude Code sessions, closed out every evening as a journal of what you actually got done.</em></p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#how-a-day-goes">How it works</a> ·
+  <a href="#what-stays-on-your-mac">Privacy</a> ·
+  <a href="https://github.com/alikayhan/z-report-releases/releases/latest">Latest release</a> ·
+  <a href="https://github.com/alikayhan/z-report-releases/issues">Report a problem</a>
+</p>
+
+---
+
+You ship more than you remember. By Friday the Tuesday fix is a blur, and the
+performance-review doc is a blank page. Z Report fixes that without asking you to log
+anything: it reads the session transcripts Claude Code already keeps on your Mac,
+cross-checks them against your Git history, and hands you a short list of achievements
+to approve, edit, or discard. Approved entries land in a private journal you can export
+as Markdown for standups, weekly updates, or reviews.
+
+The name comes from the Z-report a cash register prints at closing time: it totals what
+was actually recorded and closes the books on the day.
 
 ## Install
 
@@ -16,15 +32,80 @@ installer, npm, or Homebrew).
 brew install --cask alikayhan/tap/z-report
 ```
 
-Or download the DMG from the [latest release](https://github.com/alikayhan/z-report-releases/releases/latest)
-and drag Z Report to Applications. Every release is signed, notarized, and checksummed
-(see `checksums.txt` on the release).
+Then open **Z Report** from Applications. It runs as a normal desktop window and keeps a
+menu-bar icon; closing the window leaves it collecting evidence in the background.
+
+Prefer a download? Grab the DMG from the
+[latest release](https://github.com/alikayhan/z-report-releases/releases/latest) and drag
+Z Report to Applications. Every release is signed with a Developer ID, notarized by
+Apple, and checksummed (`checksums.txt` on the release page), so there is no Gatekeeper
+warning to click through.
+
+**You need:**
+
+- An Apple Silicon Mac on macOS 13 or newer.
+- The [Claude Code CLI](https://claude.com/product/claude-code), installed and signed
+  in. Any install works: the native installer, npm, or `brew install --cask claude-code`.
+  Evaluations run on your own Claude Code account.
+
+## How a day goes
+
+1. **Work as usual.** Every 30 minutes Z Report scans your local Claude Code
+   transcripts and notes the facts: prompts, files changed, commands run and whether
+   they passed, pull requests opened, connected tools used. Work delegated to
+   sub-agents counts as yours.
+2. **Z-read.** At a time you choose, a notification says something like
+   "3 achievements are ready." Want it sooner? **Review now** runs a mid-day read on
+   demand. A first run backfills about two weeks of work.
+3. **Confirm.** Approve, edit, merge, or discard each card, by click or keyboard
+   (`J`/`K` to move, `A` approve, `E` edit, `X` discard). Cards that look like two halves
+   of the same task say so, with merge one click away. Nothing enters the journal
+   without you.
+4. **Export.** Copy or save a daily, weekly, or custom-range Markdown summary.
+
+## Claims you can stand behind
+
+Every achievement carries a label that says how much local evidence backs it, and the
+label is set by deterministic checks, not by the model:
+
+| Label | What it means |
+| --- | --- |
+| **Work observed** | The session shows investigation or implementation |
+| **Change produced** | A concrete change exists, in the repo or outside it |
+| **Locally verified** | A relevant test, build, or check passed |
+| **Committed** | The change is in a local commit, or a pull request was recorded |
+| **Impact confirmed** | You personally confirmed a real-world outcome |
+
+Commits are checked with Git, commands against their recorded exit status, files against
+the session's change list. If the evaluator overstates something, the verifier downgrades
+it and says so. That is what makes the export safe to paste into a review.
+
+## What stays on your Mac
+
+Everything, with two exceptions that you are told about up front.
+
+- All data — evidence, candidates, journal, settings — lives in
+  `~/Library/Application Support/com.alikayhan.zreport/` as SQLite. No accounts, no
+  sync, no backend, no analytics, no telemetry.
+- **Exception 1 — evaluation.** Each Z-read runs `claude -p` on your own Claude Code
+  account and sends the prepared evidence package (session excerpts, file paths, command
+  results, names of connected tools used, commit and pull request metadata) to
+  Anthropic. It is the same boundary as using Claude Code itself. Arguments passed to
+  connected tools are never included; only the server and tool name. Prompt excerpts can
+  be turned off in Settings → Privacy.
+- **Exception 2 — update check.** About once a day the app asks GitHub for the latest
+  release metadata. The request carries nothing about you or your work.
+
+The evaluator itself is sandboxed: an ephemeral run with a read-only tool allowlist, a
+working directory containing only the evidence package, and no access to your settings
+or previous sessions. Full transcripts are never copied, only referenced. **Delete all
+data** in Settings erases everything.
 
 ## Updates
 
-Z Report checks this repository for a new release about once a day, and installs an
-update only when you confirm it — never while an evaluation is running. You can also
-update through Homebrew:
+Z Report tells you when a new version is out and shows the release notes. It installs
+only when you say so, never while an evaluation is running, and restarts into the new
+version. If you would rather drive it from the terminal:
 
 ```sh
 brew upgrade --cask z-report
@@ -38,20 +119,12 @@ brew uninstall --zap --cask z-report  # also removes all data
 ```
 
 Without Homebrew: quit Z Report from the menu bar, delete it from Applications, and
-remove `~/Library/Application Support/com.alikayhan.zreport` if you also want your data gone.
+remove `~/Library/Application Support/com.alikayhan.zreport` if you also want the data
+gone.
 
-## Privacy and network boundary
+## About this repository
 
-- All product data (evidence, candidates, journal, settings) lives in
-  `~/Library/Application Support/com.alikayhan.zreport/` — SQLite, no accounts, no sync.
-- Z Report has **no backend, no analytics, and no telemetry**.
-- Two things leave your Mac, and nothing else:
-  1. Each evaluation runs `claude -p` on **your own Claude Code account**, sending the
-     prepared evidence package (session excerpts, file paths, command results including
-     those from delegated sub-sessions, the names of external tools used to change
-     something, commit and pull request metadata) to Anthropic — the same boundary as
-     using Claude Code itself. This is disclosed in Settings. Arguments passed to
-     external tools are never included, only the server and tool name.
-  2. The updater asks GitHub for the latest release metadata about once a day.
-     The request carries nothing about you or your work, and updates only install with
-     your confirmation — never while an evaluation is running.
+Z Report's source is private. This repository publishes the signed release binaries, the
+updater metadata the installed app checks, and the Homebrew Cask's home page. Each
+release is built from a version tag and lists the source commit it came from. Found a
+bug or have an idea? [Open an issue](https://github.com/alikayhan/z-report-releases/issues).
