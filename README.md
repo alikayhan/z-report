@@ -6,8 +6,8 @@
 
 <p align="center"><em>It celebrates outcomes, not activity. No tracking, no scoring, no dashboards.</em></p>
 
-A fully local macOS app that turns Claude Code-assisted work into a private,
-evidence-backed record of achievements. It opens as a regular desktop window and
+A fully local macOS app that turns work done with Claude Code and Codex into a
+private, evidence-backed record of achievements. It opens as a regular desktop window and
 keeps a menu-bar icon; closing the window leaves it collecting evidence and running
 the evening Z-read in the background. Like the end-of-day Z-report a cash register
 prints, it totals what was actually recorded and closes the books on the day: each
@@ -21,7 +21,7 @@ macOS desktop window + menu-bar tray (Tauri)
         ↓
 background worker + scheduler (Rust)
         ↓
-transcript adapter (~/.claude/projects/*/*.jsonl) + Git evidence adapter
+transcript adapters (Claude Code ~/.claude/projects, Codex ~/.codex/sessions) + Git evidence adapter
         ↓
 normalized local evidence store (SQLite)
         ↓
@@ -33,10 +33,12 @@ review queue → approved journal → Markdown export
 Daily flow:
 
 1. **Work normally.** Every 30 minutes (configurable) the worker scans local Claude
-   Code transcripts, extracts facts (prompts, files changed, commands run, exit
-   status, pull requests opened, external tools used to change something), and
+   Code and Codex transcripts, extracts facts (prompts, files changed, commands run,
+   exit status, pull requests opened, external tools used to change something), and
    correlates them with local Git state (repo, branch, your commits). Work you
-   delegated to a sub-session counts too.
+   delegated to a sub-session counts too. Both tools feed one evidence store, so a
+   task started in Codex and finished in Claude Code arrives as one card when the
+   sessions share a day, and as a merge suggestion when they do not.
 2. **Z-read.** At your chosen time a notification announces the day's candidates
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
@@ -97,8 +99,9 @@ on Wednesday used to arrive as two cards that never saw each other. Z Report now
 each new card against the recent queue and the journal, and marks the ones that look like
 one piece of work.
 
-The signal that carries this is the session's own title, which Claude Code generates from
-how the session opened. That makes it a statement of what you set out to do, so two
+The signal that carries this is the session's own title: the name the tool gave it (Claude
+Code generates one from how the session opened; Codex names threads only in its desktop
+app), or the opening prompt when there is no name. Either way it is a statement of what you set out to do, so two
 sessions on one thread tend to share wording even when the finished cards do not — the
 evaluator rewrites each day's card in outcome-first language, which erases the overlap
 between them. Matching requires the same repository and title wording in common; shared
@@ -127,11 +130,13 @@ the entry, instead of quietly appearing as a second copy of something you have r
 - Z Report has **no backend, no analytics, and no telemetry**.
 - Two things leave your Mac, and nothing else:
   1. Each evaluation runs `claude -p` on **your own Claude Code account**, sending the
-     prepared evidence package (session excerpts, file paths, command results including
-     those from delegated sub-sessions, the names of external tools used to change
-     something, commit and pull request metadata) to Anthropic — the same boundary as
-     using Claude Code itself. This is disclosed in Settings. Arguments passed to
-     external tools are never included, only the server and tool name.
+     prepared evidence package (session excerpts from both Claude Code and Codex, file
+     paths, command results including those from delegated sub-sessions, the names of
+     external tools used to change something, commit and pull request metadata) to
+     Anthropic — the same boundary as using Claude Code itself. Codex transcripts are
+     only read locally; nothing is sent to OpenAI. This is disclosed in Settings.
+     Arguments passed to external tools are never included, only the server and tool
+     name.
   2. The updater asks GitHub for the latest release metadata about once a day.
      The request carries nothing about you or your work, and updates only install with
      your confirmation — never while an evaluation is running.
@@ -226,8 +231,38 @@ Verified against Claude Code 2.1.215:
   folded into the same session, and they contribute to the change-detection hash so
   delegated work alone re-triggers an evaluation.
 
+## Codex transcript contract (validated)
+
+Verified against Codex CLI and desktop 0.147 through 0.153. Older rollouts use several
+earlier record shapes and are not read.
+
+- One rollout per thread at `~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl`,
+  plus `~/.codex/archived_sessions/`. The uuid is the session id. Every line carries a
+  top-level `timestamp`, `type`, and `payload`.
+- The first record is `session_meta` with `id`, `cwd`, `cli_version`, `originator`,
+  `source`, and a `git` block whose `branch` is used when present. Each turn repeats
+  `cwd` in a `turn_context` record. A resumed thread appends to the same file; a forked
+  thread copies only the parent's metadata, under the parent's id, so metadata is taken
+  only from records matching the file's own id.
+- Facts arrive as `event_msg` records of type `item_completed`, keyed by `item.type`:
+  `UserMessage` (prompts, already free of injected context), `AgentMessage` with
+  `phase: final_answer` (final response), `CommandExecution` (`command` array, numeric
+  `exit_code`, `status`), `FileChange` (`changes` keyed by absolute path with `add`,
+  `update`, or `delete`), and `McpToolCall` (`server`, `tool`, `readOnlyHint`, `status`,
+  `result.isError`). The read-only hint decides mutability when it is a boolean; the
+  tool-name heuristic is the fallback.
+- Spawned sub-agents are separate rollouts carrying `parent_thread_id`; they fold into
+  the parent as delegated work, transitively. Threads whose `source` is a subagent of
+  kind `other` are approval reviewers that quote the parent's transcript as their prompt
+  and are skipped entirely.
+- Desktop threads are named in `~/.codex/session_index.jsonl` (`id`, `thread_name`); the
+  name is the session title. CLI threads have no name and, like any unnamed session, use
+  the opening prompt unless prompt retention is off, in which case they carry no title.
+- Codex records no pull-request link, so level 4 for a Codex session rests on local
+  commits.
+
 ## Non-goals (MVP)
 
-Cloud sync, accounts, other coding agents, Slack/ticketing/GitHub API integrations,
+Cloud sync, accounts, coding agents other than Claude Code and Codex, Slack/ticketing/GitHub API integrations,
 manager analytics, time/token reporting, monetary estimates, automatic publishing,
 cross-platform support.
