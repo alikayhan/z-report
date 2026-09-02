@@ -28,6 +28,7 @@ const candidates: Candidate[] = [
     confidence: 0.88,
     evidence_level: 3,
     session_ids: ["s1", "s2"],
+    agents: ["claude", "codex"],
     pr_links: [
       {
         number: 5159,
@@ -56,6 +57,7 @@ const candidates: Candidate[] = [
     confidence: 0.71,
     evidence_level: 1,
     session_ids: ["s3"],
+    agents: ["claude"],
     pr_links: [],
     repo: "/Users/dev/gymondo-ios-app",
     model: "claude-opus-5",
@@ -87,6 +89,7 @@ const journal: JournalEntry[] = [
     ],
     evidence_level: 4,
     session_ids: ["s4"],
+    agents: ["claude"],
     pr_links: [
       {
         number: 12,

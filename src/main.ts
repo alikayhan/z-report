@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { api, inTauri, levelLabel, Candidate, EvalRun, JournalEntry, Overview, PrLink, Settings } from "./api";
+import { agentsLabel, api, inTauri, levelLabel, Candidate, EvalRun, JournalEntry, Overview, PrLink, Settings } from "./api";
 import "./styles.css";
 
 type View = "review" | "journal" | "export" | "settings";
@@ -170,7 +170,7 @@ function renderQueue() {
   for (const [day, cands] of [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))) {
     html += `<div class="day-head">${esc(dayHeading(day))}</div>`;
     for (const c of cands) {
-      const meta = [repoName(c.repo), plural(c.session_ids.length, "session")].join(" · ");
+      const meta = metaLine(repoName(c.repo), plural(c.session_ids.length, "session"), agentsLabel(c.agents));
       html += `<div class="row ${c.id === state.selId ? "active" : ""}" data-id="${escAttr(c.id)}" tabindex="0">
         <input type="checkbox" data-sel="${escAttr(c.id)}" title="Select for merge" ${state.selection.has(c.id) ? "checked" : ""}>
         <div><div class="row-title">${esc(c.title)}</div><div class="row-meta">${esc(meta)}</div></div>
@@ -217,6 +217,10 @@ function barcode(): string {
 }
 
 const BARCODE = barcode();
+
+function metaLine(...parts: string[]): string {
+  return parts.filter(Boolean).join(" · ");
+}
 
 function sessionCodes(ids: string[]): string {
   const shown = ids.slice(0, 3).map((s) => s.replace(/-/g, "").slice(0, 8).toUpperCase());
@@ -321,8 +325,12 @@ function renderEmptyReceipt(scroll: HTMLElement, bar: HTMLElement) {
   bar.innerHTML = "";
 }
 
+function receiptSub(c: Candidate): string {
+  return metaLine(daySpan(c.day, c.day_end), plural(c.session_ids.length, "session"), agentsLabel(c.agents));
+}
+
 function renderEditableReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLElement) {
-  const sub = [daySpan(c.day, c.day_end), plural(c.session_ids.length, "session")].join(" · ");
+  const sub = receiptSub(c);
   const outcomes = state.draftOutcomes!;
   scroll.innerHTML = `<article class="receipt"><div class="tear top"></div><div class="paper">
     <div class="r-store">${esc(repoName(c.repo))}</div>
@@ -347,7 +355,7 @@ function renderEditableReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLEleme
 
 function renderCandidateReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLElement) {
   const span = daySpan(c.day, c.day_end);
-  const sub = [span, plural(c.session_ids.length, "session")].join(" · ");
+  const sub = receiptSub(c);
   const idx = state.pending.findIndex((candidate) => candidate.id === c.id);
   $("#crumb").textContent = `Card ${idx + 1} of ${state.pending.length} · ${span}`;
 
@@ -446,9 +454,12 @@ function renderJournal() {
     } else {
       inner += `<div class="perf"></div><div style="height:16px"></div>`;
     }
-    const metaLeft = [repoName(e.repo), `approved ${e.approved_at.slice(0, 10)}`, e.edited ? "edited" : ""]
-      .filter(Boolean)
-      .join(" · ");
+    const metaLeft = metaLine(
+      repoName(e.repo),
+      agentsLabel(e.agents),
+      `approved ${e.approved_at.slice(0, 10)}`,
+      e.edited ? "edited" : "",
+    );
     const impactUi =
       state.impactForId === e.id
         ? `<div class="impact-form">

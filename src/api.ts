@@ -22,6 +22,14 @@ export interface PrLink {
   ts: string | null;
 }
 
+export type Agent = "claude" | "codex";
+
+const AGENT_LABELS: Record<Agent, string> = { claude: "Claude Code", codex: "Codex" };
+
+export function agentsLabel(agents: Agent[]): string {
+  return agents.map((agent) => AGENT_LABELS[agent]).join(" + ");
+}
+
 export interface RelatedLink {
   kind: "continuation" | "journaled";
   target_id: string;
@@ -41,6 +49,7 @@ export interface Candidate {
   confidence: number;
   evidence_level: number;
   session_ids: string[];
+  agents: Agent[];
   pr_links: PrLink[];
   repo: string | null;
   model: string | null;
@@ -58,6 +67,7 @@ export interface JournalEntry {
   outcomes: Outcome[];
   evidence_level: number;
   session_ids: string[];
+  agents: Agent[];
   pr_links: PrLink[];
   repo: string | null;
   model: string | null;

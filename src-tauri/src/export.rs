@@ -83,6 +83,7 @@ mod tests {
             }],
             evidence_level: 3,
             session_ids: vec!["s1".into()],
+            agents: vec![],
             pr_links: vec![PrLink {
                 number: 5159,
                 url: "https://github.com/acme/widgets/pull/5159".into(),
@@ -103,6 +104,7 @@ mod tests {
             outcomes: vec![],
             evidence_level: 4,
             session_ids: vec!["s2".into()],
+            agents: vec![],
             pr_links: vec![],
             repo: None,
             model: None,

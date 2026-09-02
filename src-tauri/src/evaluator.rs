@@ -150,10 +150,11 @@ fn output_schema() -> Value {
 pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
     json!({
         "date": day,
-        "instructions": "Evidence collected locally from Claude Code sessions and Git. Reference facts by their ref ids.",
+        "instructions": "Evidence collected locally from coding-agent sessions (Claude Code, Codex) and Git. Reference facts by their ref ids.",
         "sessions": sessions.iter().map(|s| json!({
             "id": s.session_id,
             "ref": format!("session:{}", s.session_id),
+            "agent": s.agent.label(),
             "session_title": s.title,
             "cwd": s.cwd,
             "repo": s.repo_root,
@@ -204,12 +205,12 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
     })
 }
 
-const EVALUATOR_PROMPT: &str = r#"You are the evaluator for Z Report, a private local accomplishment journal. Read ./evidence.json — it contains today's Claude Code session evidence and Git facts for one developer.
+const EVALUATOR_PROMPT: &str = r#"You are the evaluator for Z Report, a private local accomplishment journal. Read ./evidence.json — it contains today's coding-agent session evidence (Claude Code and Codex, see each session's "agent") and Git facts for one developer.
 
 Reconstruct the day's accomplishments as achievements a developer would be proud to put in a standup or performance review. Follow these rules strictly:
 
 1. Celebrate outcomes, not activity. "Fixed flaky auth test that blocked CI" is an achievement; "ran 14 commands" is not.
-2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
+2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread, regardless of which agent ran them — the developer often carries one piece of work across both tools. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
 3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "action:…", "commit:…", "pr:…"). Never invent refs.
 4. Assign each claim the highest evidence level the cited refs support:
    1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit or has a recorded PR link alongside a file change.
@@ -452,6 +453,7 @@ mod tests {
         let pkg = build_evidence_package("2026-07-20", &[facts]);
         let s = pkg["sessions"][0].clone();
         assert_eq!(s["ref"], "session:abc");
+        assert_eq!(s["agent"], "Claude Code");
         assert_eq!(s["commands"][0]["ref"], "cmd:abc:0");
         assert_eq!(s["commands"][0]["delegated"], true);
         assert_eq!(s["external_actions"][0]["ref"], "action:abc:0");

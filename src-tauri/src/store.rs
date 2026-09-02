@@ -107,6 +107,7 @@ impl Store {
         for table in ["candidates", "journal"] {
             add_column_if_missing(&conn, table, "pr_links", "TEXT NOT NULL DEFAULT '[]'")?;
             add_column_if_missing(&conn, table, "day_end", "TEXT")?;
+            add_column_if_missing(&conn, table, "agents", "TEXT NOT NULL DEFAULT '[]'")?;
         }
         add_column_if_missing(&conn, "candidates", "related", "TEXT")?;
         let candidate_index_columns: i64 = conn.query_row(
@@ -285,8 +286,8 @@ impl Store {
     pub fn insert_candidate(&self, c: &Candidate) -> Result<()> {
         self.conn.execute(
             "INSERT INTO candidates(id,day,day_end,title,contribution,outcomes,uncertainties,confidence,
-               evidence_level,session_ids,pr_links,repo,model,status,related,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+               evidence_level,session_ids,pr_links,repo,model,status,related,created_at,agents)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 c.id,
                 c.day,
@@ -303,7 +304,8 @@ impl Store {
                 c.model,
                 c.status,
                 c.related.as_ref().map(serde_json::to_string).transpose()?,
-                c.created_at
+                c.created_at,
+                serde_json::to_string(&c.agents)?
             ],
         )?;
         Ok(())
@@ -329,10 +331,11 @@ impl Store {
                 .get::<_, Option<String>>(14)?
                 .and_then(|s| serde_json::from_str(&s).ok()),
             created_at: r.get(15)?,
+            agents: serde_json::from_str(&r.get::<_, String>(16)?).unwrap_or_default(),
         })
     }
 
-    const CANDIDATE_COLS: &'static str = "id,day,day_end,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,related,created_at";
+    const CANDIDATE_COLS: &'static str = "id,day,day_end,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,related,created_at,agents";
 
     pub fn candidates_by_status(&self, status: &str) -> Result<Vec<Candidate>> {
         let sql = format!(
@@ -445,8 +448,8 @@ impl Store {
 
     pub fn insert_journal(&self, e: &JournalEntry) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO journal(id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            "INSERT INTO journal(id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited,agents)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 e.id,
                 e.day,
@@ -460,7 +463,8 @@ impl Store {
                 e.repo,
                 e.model,
                 e.approved_at,
-                e.edited as i64
+                e.edited as i64,
+                serde_json::to_string(&e.agents)?
             ],
         )?;
         Ok(())
@@ -473,7 +477,7 @@ impl Store {
         query: Option<&str>,
     ) -> Result<Vec<JournalEntry>> {
         let mut sql = String::from(
-            "SELECT id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited
+            "SELECT id,day,day_end,title,contribution,outcomes,evidence_level,session_ids,pr_links,repo,model,approved_at,edited,agents
              FROM journal WHERE day<=?2 AND coalesce(day_end,day)>=?1",
         );
         if query.is_some() {
@@ -496,6 +500,7 @@ impl Store {
                 model: r.get(10)?,
                 approved_at: r.get(11)?,
                 edited: r.get::<_, i64>(12)? != 0,
+                agents: serde_json::from_str(&r.get::<_, String>(13)?).unwrap_or_default(),
             })
         };
         let rows: Vec<JournalEntry> = if let Some(q) = query {
@@ -643,6 +648,7 @@ mod tests {
             confidence: 0.5,
             evidence_level: 1,
             session_ids: vec!["s1".into()],
+            agents: vec![Agent::Claude],
             pr_links: vec![],
             repo: None,
             model: None,
@@ -719,6 +725,7 @@ mod tests {
             outcomes: vec![],
             evidence_level: 4,
             session_ids: vec!["s1".into()],
+            agents: vec![Agent::Codex],
             pr_links: vec![pr.clone()],
             repo: None,
             model: None,
@@ -732,6 +739,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(loaded[0].pr_links, vec![pr]);
+        assert_eq!(loaded[0].agents, vec![Agent::Codex]);
     }
 
     #[test]
@@ -746,6 +754,7 @@ mod tests {
             outcomes: vec![],
             evidence_level: 2,
             session_ids: vec![],
+            agents: vec![],
             pr_links: vec![],
             repo: None,
             model: None,

@@ -249,6 +249,7 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
         ordered.iter().flat_map(|c| c.session_ids.iter().cloned()),
         Clone::clone,
     );
+    let agents = unique_agents(ordered.iter().flat_map(|c| c.agents.iter().copied()));
     let day = ordered[0].day.clone();
     let day_end = ordered
         .iter()
@@ -271,6 +272,7 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
         confidence: parts.iter().map(|c| c.confidence).fold(1.0, f64::min),
         evidence_level: parts.iter().map(|c| c.evidence_level).max().unwrap_or(1),
         session_ids,
+        agents,
         pr_links: unique_pr_links(ordered.iter().flat_map(|c| &c.pr_links)),
         repo: ordered.iter().find_map(|c| c.repo.clone()),
         model: lead.model.clone(),
@@ -472,6 +474,7 @@ fn build_candidates(
             confidence: a.confidence.clamp(0.0, 1.0),
             evidence_level: level,
             session_ids: a.session_ids,
+            agents: unique_agents(cited.iter().map(|s| s.agent)),
             pr_links,
             repo,
             model: model.clone(),
@@ -614,6 +617,7 @@ mod tests {
             confidence: 0.8,
             evidence_level: level,
             session_ids: vec![format!("s-{id}")],
+            agents: vec![Agent::Claude],
             pr_links: vec![],
             repo: Some("/r/synapse".into()),
             model: None,
@@ -712,5 +716,36 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].pr_links, vec![pr]);
+    }
+
+    #[test]
+    fn candidates_and_merges_record_which_agents_did_the_work() {
+        let sessions = vec![
+            SessionFacts {
+                session_id: "s1".into(),
+                agent: Agent::Codex,
+                ..Default::default()
+            },
+            SessionFacts {
+                session_id: "s2".into(),
+                agent: Agent::Claude,
+                ..Default::default()
+            },
+        ];
+        let achievements = vec![Achievement {
+            title: "Wired the release pipeline".into(),
+            contribution: "…".into(),
+            outcomes: vec![],
+            uncertainties: vec![],
+            confidence: 0.9,
+            session_ids: vec!["s1".into(), "s2".into()],
+        }];
+        let candidates = build_candidates("2026-07-20", &sessions, achievements, None);
+        assert_eq!(candidates[0].agents, vec![Agent::Claude, Agent::Codex]);
+
+        let mut codex_only = part("a", "2026-07-19", 2, "Scoped", "One");
+        codex_only.agents = vec![Agent::Codex];
+        let merged = merge_into_one(&[part("b", "2026-07-20", 3, "Built", "Two"), codex_only]);
+        assert_eq!(merged.agents, vec![Agent::Claude, Agent::Codex]);
     }
 }
