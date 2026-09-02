@@ -25,7 +25,7 @@ transcript adapters (Claude Code ~/.claude/projects, Codex ~/.codex/sessions) + 
         ↓
 normalized local evidence store (SQLite)
         ↓
-constrained Claude evaluator (claude -p, Opus 5, xhigh effort)
+constrained evaluator (claude -p, Opus 5, xhigh; falls back to codex exec, GPT-5.6 Sol, high)
         ↓
 review queue → approved journal → Markdown export
 ```
@@ -42,7 +42,9 @@ Daily flow:
 2. **Z-read.** At your chosen time a notification announces the day's candidates
    ("3 achievements are ready"). "Review now" runs a mid-day X-read on demand. Either
    one evaluates every session from the last 15 days it hasn't evaluated yet, one
-   evaluator run per day, so a first run backfills about two weeks of work.
+   evaluator run per day, so a first run backfills about two weeks of work. The
+   evaluator runs on Claude Code; when Claude Code is not installed or its run fails,
+   the same evidence goes to Codex instead, and each run records which model answered.
 3. **Confirm.** Approve, edit, merge, or discard each candidate — by click or with
    the keyboard (J/K moves through the queue, A approves, E edits, X discards).
    Cards that look like two halves of the same work say so, with the merge one
@@ -129,20 +131,22 @@ the entry, instead of quietly appearing as a second copy of something you have r
   `~/Library/Application Support/com.alikayhan.zreport/` — SQLite, no accounts, no sync.
 - Z Report has **no backend, no analytics, and no telemetry**.
 - Two things leave your Mac, and nothing else:
-  1. Each evaluation runs `claude -p` on **your own Claude Code account**, sending the
-     prepared evidence package (session excerpts from both Claude Code and Codex, file
-     paths, command results including those from delegated sub-sessions, the names of
-     external tools used to change something, commit and pull request metadata) to
-     Anthropic — the same boundary as using Claude Code itself. Codex transcripts are
-     only read locally; nothing is sent to OpenAI. This is disclosed in Settings.
+  1. Each evaluation runs on **your own Claude Code account**, or on your Codex account
+     when Claude Code is not installed or its run fails, sending the prepared evidence
+     package (session excerpts from both Claude Code and Codex, file paths, command
+     results including those from delegated sub-sessions, the names of external tools
+     used to change something, commit and pull request metadata) to Anthropic, or to
+     OpenAI for a Codex run — the same boundary as using that tool itself. Transcripts
+     from either tool are only ever read locally. This is disclosed in Settings.
      Arguments passed to external tools are never included, only the server and tool
      name.
   2. The updater asks GitHub for the latest release metadata about once a day.
      The request carries nothing about you or your work, and updates only install with
      your confirmation — never while an evaluation is running.
-- The evaluator is sandboxed: fresh ephemeral run, read-only tool allowlist
-  (`Read,Grep,Glob`), working directory containing only the evidence package,
-  no session persistence, no user settings, and an optional per-run safety cap.
+- The evaluator is sandboxed: fresh ephemeral run, read-only tools (Claude Code:
+  `Read,Grep,Glob`; Codex: `--sandbox read-only`), working directory containing only
+  the evidence package, no session persistence, no user settings, and on Claude Code an
+  optional per-run safety cap.
 - Prompt excerpts in evidence are optional (Settings → Privacy). Full transcripts
   are never copied — only referenced. The retention setting governs the review queue:
   unreviewed candidates age out, approved entries stay. Extracted session facts are
@@ -151,7 +155,8 @@ the entry, instead of quietly appearing as a second copy of something you have r
 
 ## Development
 
-Requirements: Rust (stable), Node 20+, Claude Code CLI installed and authenticated.
+Requirements: Rust (stable), Node 20+, and the Claude Code or Codex CLI installed and
+authenticated (Claude Code is preferred; Codex is the fallback).
 
 ```sh
 npm install
@@ -215,6 +220,29 @@ Verified against Claude Code 2.1.215:
   --setting-sources ""` provide read-only, ephemeral isolation; `--max-budget-usd`
   adds a fixed per-run safety cap when the cost limit is enabled. Permission denials
   are visible in the result.
+
+Verified against Codex CLI 0.152.1:
+
+- `codex exec --model gpt-5.6-sol -c model_reasoning_effort="high" --output-schema
+  <file> -o <file> --json` writes the schema-checked answer to the `-o` file and streams
+  typed events (`thread.started`, `item.completed`, `turn.completed` with token usage)
+  to stdout. No event names the serving model, so the requested model is recorded.
+- The schema must be strict for OpenAI structured outputs: every object closed with
+  `additionalProperties: false` and every property required. The same schema is handed
+  to both CLIs.
+- `--sandbox read-only -c approval_policy="never" --ephemeral --ignore-user-config
+  --skip-git-repo-check` provide read-only, ephemeral isolation: no rollout is written
+  (so the run never shows up as a Codex session of its own), and the developer's MCP
+  servers, hooks, and reviewer settings are not loaded. Auth still comes from
+  `~/.codex`.
+- `codex exec` waits on stdin when it is not a terminal, so stdin is closed explicitly.
+  `codex login status` reports the auth method in prose ("Logged in using ChatGPT");
+  an API-key login is treated as metered.
+- There is no per-run budget flag, so the cost limit setting applies to Claude Code only.
+- Fallback order is fixed: Claude Code runs when its CLI is found; Codex runs when it is
+  not, or when the Claude Code run returns any error. A run that fell back keeps the
+  Claude Code failure as its note, and the model column names the CLI that answered.
+  There is no setting for this.
 - Transcript JSONL records are typed (`user`, `assistant`, `system`, `pr-link`,
   `ai-title`, attachments, snapshots); parsing is defensive because the schema is
   internal to Claude Code and undocumented. Records carry `cwd`, `gitBranch`,
