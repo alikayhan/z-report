@@ -43,9 +43,7 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
         if known.get(&file.session_id).map(String::as_str) == Some(file.content_hash.as_str()) {
             continue;
         }
-        let Ok(mut facts) =
-            ingest::parse_transcript(&file.path, &file.session_id, settings.retain_prompts)
-        else {
+        let Ok(mut facts) = ingest::parse_transcript(file, settings.retain_prompts) else {
             continue;
         };
         gitfacts::correlate(&mut facts);

@@ -1,7 +1,7 @@
 [package]
 name = "z-report"
 version = "0.1.0"
-description = "A local Claude Code accomplishment journal"
+description = "A local accomplishment journal for Claude Code and Codex work"
 edition = "2021"
 
 [lib]

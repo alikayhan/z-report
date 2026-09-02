@@ -1,40 +1,13 @@
+use super::{
+    clean_title, command_fact, describe, each_record, external_action, home, is_transcript,
+    named_branch, push_prompt, record_file_change, set_final_response, update_timestamps,
+    DiscoveredFile,
+};
 use crate::models::*;
-use crate::text;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-
-const MAX_PROMPTS: usize = 25;
-const PROMPT_CHARS: usize = 400;
-const RESPONSE_CHARS: usize = 1500;
-const TITLE_CHARS: usize = 120;
-
-pub fn transcripts_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
-        .join("projects")
-}
-
-pub struct DiscoveredFile {
-    pub path: PathBuf,
-    pub session_id: String,
-    pub content_hash: String,
-    pub mtime: u64,
-}
-
-fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn is_transcript(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "jsonl")
-}
 
 fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(transcript.with_extension("").join("subagents")) else {
@@ -49,10 +22,9 @@ fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
     out
 }
 
-pub fn discover() -> Vec<DiscoveredFile> {
+pub(super) fn discover() -> Vec<DiscoveredFile> {
     let mut out = Vec::new();
-    let root = transcripts_root();
-    let Ok(projects) = std::fs::read_dir(&root) else {
+    let Ok(projects) = std::fs::read_dir(home().join(".claude").join("projects")) else {
         return out;
     };
     for project in projects.flatten() {
@@ -64,159 +36,20 @@ pub fn discover() -> Vec<DiscoveredFile> {
             if !is_transcript(&path) {
                 continue;
             }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            let Some(session_id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned)
+            else {
                 continue;
             };
-            let Ok(meta) = file.metadata() else { continue };
-            let mtime = mtime_secs(&meta);
-            let mut content_hash = format!("{}:{}", meta.len(), mtime);
-            // Delegated work can change without the parent growing, and the suffix
-            // only appears when there is any, so existing hashes stay valid.
-            let sidechains: Vec<std::fs::Metadata> = sidechain_files(&path)
-                .iter()
-                .filter_map(|p| p.metadata().ok())
-                .collect();
-            if !sidechains.is_empty() {
-                let len: u64 = sidechains.iter().map(|m| m.len()).sum();
-                let newest = sidechains.iter().map(mtime_secs).max().unwrap_or(0);
-                content_hash.push_str(&format!(":{}:{len}:{newest}", sidechains.len()));
-            }
-            out.push(DiscoveredFile {
-                session_id: stem.to_string(),
-                content_hash,
-                path,
-                mtime,
-            });
+            let delegates = sidechain_files(&path);
+            out.extend(describe(Agent::Claude, path, session_id, None, delegates));
         }
     }
     out
 }
 
-fn earlier(a: &str, b: &str) -> bool {
-    match (
-        chrono::DateTime::parse_from_rfc3339(a),
-        chrono::DateTime::parse_from_rfc3339(b),
-    ) {
-        (Ok(a), Ok(b)) => a < b,
-        _ => a < b,
-    }
-}
-
-fn update_timestamps(facts: &mut SessionFacts, ts: &str) {
-    if facts.first_ts.as_deref().is_none_or(|cur| earlier(ts, cur)) {
-        facts.first_ts = Some(ts.to_string());
-    }
-    if facts.last_ts.as_deref().is_none_or(|cur| earlier(cur, ts)) {
-        facts.last_ts = Some(ts.to_string());
-    }
-}
-
-fn classify_command(cmd: &str) -> &'static str {
-    let c = cmd.to_lowercase();
-    let test_markers = [
-        "cargo test",
-        "npm test",
-        "npm run test",
-        "pytest",
-        "jest",
-        "vitest",
-        "go test",
-        "xcodebuild test",
-        "swift test",
-        "mvn test",
-        "gradle test",
-        "rspec",
-        "phpunit",
-        "bundle exec rspec",
-    ];
-    let build_markers = [
-        "cargo build",
-        "npm run build",
-        "tsc",
-        "xcodebuild build",
-        "swift build",
-        "make",
-        "go build",
-        "gradle build",
-        "mvn package",
-        "vite build",
-        "webpack",
-        "cargo check",
-    ];
-    let check_markers = [
-        "clippy",
-        "eslint",
-        "lint",
-        "fmt --check",
-        "prettier --check",
-        "typecheck",
-        "mypy",
-        "ruff",
-    ];
-    if test_markers.iter().any(|m| c.contains(m)) {
-        "test"
-    } else if check_markers.iter().any(|m| c.contains(m)) {
-        "check"
-    } else if build_markers.iter().any(|m| c.contains(m)) {
-        "build"
-    } else if c.starts_with("git ") || c.contains(" git ") {
-        "git"
-    } else {
-        "other"
-    }
-}
-
-const MUTATING_VERBS: &[&str] = &[
-    "add",
-    "append",
-    "archive",
-    "assign",
-    "close",
-    "copy",
-    "create",
-    "delete",
-    "duplicate",
-    "edit",
-    "insert",
-    "merge",
-    "move",
-    "post",
-    "publish",
-    "remove",
-    "rename",
-    "reply",
-    "schedule",
-    "send",
-    "set",
-    "submit",
-    "transition",
-    "update",
-    "upload",
-    "write",
-];
-
-// Tool metadata has no mutability flag, so only whole action words count as writes.
-fn mutates_external_state(tool: &str) -> bool {
-    let mut words = String::new();
-    for c in tool.chars() {
-        if c == '_' || c == '-' {
-            words.push(' ');
-        } else {
-            if c.is_uppercase() {
-                words.push(' ');
-            }
-            words.extend(c.to_lowercase());
-        }
-    }
-    words
-        .split_whitespace()
-        .any(|w| MUTATING_VERBS.contains(&w))
-}
-
 #[derive(Default)]
 struct Parse {
     facts: SessionFacts,
-    files: HashMap<String, FileChange>,
     commands: Vec<(String, CommandFact)>,
     actions: Vec<(String, ExternalAction)>,
     results: HashMap<String, bool>,
@@ -224,29 +57,15 @@ struct Parse {
 }
 
 // Transcript JSONL is undocumented; unknown records and missing fields are ignored.
-pub fn parse_transcript(
-    path: &Path,
-    session_id: &str,
-    retain_prompts: bool,
-) -> Result<SessionFacts> {
+pub(super) fn parse(file: &DiscoveredFile, facts: SessionFacts) -> Result<SessionFacts> {
     let mut p = Parse {
-        facts: SessionFacts {
-            session_id: session_id.to_string(),
-            file_path: path.to_string_lossy().to_string(),
-            ..Default::default()
-        },
+        facts,
         ..Default::default()
     };
-    absorb(&mut p, &std::fs::read_to_string(path)?);
-    for side in sidechain_files(path) {
-        if let Ok(content) = std::fs::read_to_string(&side) {
-            absorb(&mut p, &content);
-        }
-    }
+    each_record(file, |record, _| absorb_record(&mut p, record))?;
 
     let Parse {
         mut facts,
-        files,
         commands,
         actions,
         results,
@@ -268,32 +87,14 @@ pub fn parse_transcript(
             a
         })
         .collect();
-    facts.files_changed = files.into_values().collect();
-    facts.files_changed.sort_by(|a, b| a.path.cmp(&b.path));
-    if !retain_prompts {
-        facts.prompts.clear();
-        facts.final_response = None;
-    }
     Ok(facts)
-}
-
-fn absorb(p: &mut Parse, content: &str) {
-    for line in content.lines() {
-        if let Ok(record) = serde_json::from_str::<Value>(line) {
-            absorb_record(p, &record);
-        }
-    }
 }
 
 fn absorb_record(p: &mut Parse, record: &Value) {
     match record["type"].as_str() {
         Some("ai-title") => {
-            if let Some(title) = record["aiTitle"]
-                .as_str()
-                .map(str::trim)
-                .filter(|title| !title.is_empty())
-            {
-                p.facts.title = Some(text::truncate(title, TITLE_CHARS));
+            if let Some(title) = record["aiTitle"].as_str().and_then(clean_title) {
+                p.facts.title = Some(title);
             }
         }
         Some("pr-link") => absorb_pr_link(p, record),
@@ -345,10 +146,8 @@ fn absorb_session_metadata(facts: &mut SessionFacts, record: &Value) {
     if let Some(cwd) = record["cwd"].as_str() {
         facts.cwd = Some(cwd.to_owned());
     }
-    if let Some(branch) = record["gitBranch"].as_str() {
-        if !branch.is_empty() && branch != "HEAD" {
-            facts.git_branch = Some(branch.to_owned());
-        }
+    if let Some(branch) = named_branch(&record["gitBranch"]) {
+        facts.git_branch = Some(branch);
     }
     if let Some(version) = record["version"].as_str() {
         facts.cli_version = Some(version.to_owned());
@@ -363,10 +162,8 @@ fn absorb_user(p: &mut Parse, record: &Value, delegated: bool) {
                 .as_str()
                 .is_none_or(|kind| kind == "human");
         let is_meta = prompt.starts_with('<') || prompt.starts_with("[Request interrupted");
-        if is_human && !is_meta && p.facts.prompts.len() < MAX_PROMPTS {
-            p.facts
-                .prompts
-                .push(text::truncate(prompt.trim(), PROMPT_CHARS));
+        if is_human && !is_meta {
+            push_prompt(&mut p.facts, prompt);
         }
         return;
     }
@@ -398,11 +195,8 @@ fn absorb_assistant(p: &mut Parse, record: &Value, delegated: bool) {
 }
 
 fn absorb_response(p: &mut Parse, block: &Value, delegated: bool) {
-    let Some(response) = block["text"].as_str().map(str::trim) else {
-        return;
-    };
-    if !delegated && !response.is_empty() {
-        p.facts.final_response = Some(text::truncate(response, RESPONSE_CHARS));
+    if let Some(response) = block["text"].as_str().filter(|_| !delegated) {
+        set_final_response(&mut p.facts, response);
     }
 }
 
@@ -415,29 +209,20 @@ fn absorb_tool_use(p: &mut Parse, block: &Value, timestamp: Option<&str>, delega
             else {
                 return;
             };
-            let fact = CommandFact {
-                id: format!("cmd:{}:{}", p.facts.session_id, p.commands.len()),
-                command: text::truncate(command, 300),
-                ok: true,
-                kind: classify_command(command).to_owned(),
-                ts: timestamp.map(String::from),
-                via_delegate: delegated,
-            };
+            let fact = command_fact(
+                &p.facts.session_id,
+                p.commands.len(),
+                command,
+                timestamp,
+                delegated,
+            );
             p.commands.push((id.to_owned(), fact));
         }
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
             let Some(path) = input["file_path"].as_str() else {
                 return;
             };
-            let entry = p.files.entry(path.to_owned()).or_insert(FileChange {
-                path: path.to_owned(),
-                tool: name.to_owned(),
-                count: 0,
-                via_delegate: delegated,
-            });
-            entry.count += 1;
-            // Any direct edit makes the combined file change direct.
-            entry.via_delegate &= delegated;
+            record_file_change(&mut p.facts, path, name, delegated);
         }
         _ => {
             let Some((server, tool)) = name
@@ -449,41 +234,38 @@ fn absorb_tool_use(p: &mut Parse, block: &Value, timestamp: Option<&str>, delega
             let Some(id) = block["id"].as_str() else {
                 return;
             };
-            let action = ExternalAction {
-                id: format!("action:{}:{}", p.facts.session_id, p.actions.len()),
-                server: server.to_owned(),
-                tool: tool.to_owned(),
-                ok: true,
-                mutating: mutates_external_state(tool),
-                ts: timestamp.map(String::from),
-                via_delegate: delegated,
-            };
+            let action = external_action(
+                &p.facts.session_id,
+                p.actions.len(),
+                server,
+                tool,
+                timestamp,
+                delegated,
+            );
             p.actions.push((id.to_owned(), action));
         }
     }
 }
 
-pub fn session_day(facts: &SessionFacts) -> Option<String> {
-    let ts = facts.last_ts.as_deref()?;
-    let dt = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
-    Some(
-        dt.with_timezone(&chrono::Local)
-            .format("%Y-%m-%d")
-            .to_string(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::session_day;
 
-    #[test]
-    fn classifies_commands() {
-        assert_eq!(classify_command("cargo test --all"), "test");
-        assert_eq!(classify_command("npx tsc --noEmit"), "build");
-        assert_eq!(classify_command("cargo clippy"), "check");
-        assert_eq!(classify_command("git commit -m x"), "git");
-        assert_eq!(classify_command("ls -la"), "other");
+    fn parse_transcript(
+        path: &Path,
+        session_id: &str,
+        retain_prompts: bool,
+    ) -> Result<SessionFacts> {
+        let file = describe(
+            Agent::Claude,
+            path.to_path_buf(),
+            session_id.to_owned(),
+            None,
+            sidechain_files(path),
+        )
+        .expect("fixture exists");
+        crate::ingest::parse_transcript(&file, retain_prompts)
     }
 
     #[test]
@@ -503,6 +285,7 @@ mod tests {
         ];
         std::fs::write(&p, lines.join("\n")).unwrap();
         let facts = parse_transcript(&p, "s1", true).unwrap();
+        assert_eq!(facts.agent, Agent::Claude);
         assert_eq!(facts.prompts, vec!["Fix the login bug"]);
         assert_eq!(facts.title.as_deref(), Some("Fix the failing login flow"));
         assert_eq!(facts.cwd.as_deref(), Some("/tmp/repo"));
@@ -594,29 +377,6 @@ mod tests {
         assert!(facts.has_substance());
         assert!(facts.prompts.is_empty());
         assert_eq!(facts.files_changed.len(), 1);
-    }
-
-    #[test]
-    fn classifies_mutating_mcp_tools() {
-        for tool in [
-            "addCommentToJiraIssue",
-            "createJiraIssue",
-            "transitionJiraIssue",
-            "notion-update-page",
-            "slack_send_message",
-            "upload_assets",
-        ] {
-            assert!(mutates_external_state(tool), "{tool} should be a mutation");
-        }
-        for tool in [
-            "getTransitionsForJiraIssue",
-            "download_assets",
-            "searchJiraIssuesUsingJql",
-            "notion-fetch",
-            "preview_screenshot",
-        ] {
-            assert!(!mutates_external_state(tool), "{tool} should be a read");
-        }
     }
 
     #[test]

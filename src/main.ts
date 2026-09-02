@@ -319,7 +319,7 @@ function renderEmptyReceipt(scroll: HTMLElement, bar: HTMLElement) {
     <p>The till is quiet. ${
       o && o.session_count > 0
         ? `Your next Z-read closes the day at ${esc(o.zread_time)}.`
-        : "Work with Claude Code as usual — achievements appear here after the daily Z-read."
+        : "Work with Claude Code or Codex as usual — achievements appear here after the daily Z-read."
     }</p>
   </div>`;
   bar.innerHTML = "";
@@ -581,7 +581,7 @@ function renderSettings() {
         <label for="set-prompts">Keep prompt excerpts in evidence</label>
         <input type="checkbox" id="set-prompts" ${s.retain_prompts ? "checked" : ""}>
       </div>
-      <p class="setting-hint">Off = only metadata (files, commands, commits) is stored and shown to the evaluator. Full transcripts are never copied; Z Report only references the session files Claude Code already keeps.</p>
+      <p class="setting-hint">Off = only metadata (files, commands, commits) is stored and shown to the evaluator. Full transcripts are never copied; Z Report only references the session files Claude Code and Codex already keep.</p>
       <div class="setting-row">
         <label for="set-retention">Keep unreviewed candidates for</label>
         <input type="number" id="set-retention" min="0" max="3650" value="${s.retention_days}">
@@ -604,10 +604,12 @@ function renderSettings() {
       <p class="setting-hint">A safety valve on any single evaluation. Turn off to let a run finish no matter how large (uncapped).</p>
       <div class="boundary-note">
         <strong>What leaves this Mac:</strong> evaluation runs on your own Claude Code
-        account and sends the prepared evidence package (session excerpts, file paths,
-        command results including those from delegated sub-sessions, the names of
-        external tools you used to change something, commit and pull request
-        metadata) to Anthropic — the same boundary as using Claude Code itself. ${o?.claude_found ? "" : "<strong>Claude Code CLI was not found — install it or set its path below.</strong>"}
+        account and sends the prepared evidence package (session excerpts from both
+        Claude Code and Codex, file paths, command results including those from
+        delegated sub-sessions, the names of external tools you used to change
+        something, commit and pull request metadata) to Anthropic — the same boundary
+        as using Claude Code itself. Codex transcripts are only read locally; nothing
+        is sent to OpenAI. ${o?.claude_found ? "" : "<strong>Claude Code CLI was not found — install it or set its path below.</strong>"}
         Z Report has no backend, no analytics, and no telemetry of its own.
       </div>
     </div>
