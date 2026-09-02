@@ -138,7 +138,9 @@ function renderSidebar() {
     rows.push(`<div class="srow"><span>Next Z-read</span><b>${esc(o.zread_time)}</b></div>`);
     rows.push(`<div class="srow"><span>Last scan</span><b>${esc(relTime(o.last_scan_at))}</b></div>`);
     rows.push(`<div class="srow"><span>Sessions</span><b>${o.session_count}</b></div>`);
-    if (!o.claude_found) rows.push(`<div class="srow warn"><span>Claude CLI</span><b>missing</b></div>`);
+    if (!o.evaluators.some((e) => e.found)) {
+      rows.push(`<div class="srow warn"><span>Evaluator CLI</span><b>missing</b></div>`);
+    }
   }
   $("#side-status").innerHTML = rows.join("");
   $("#evaluating").hidden = !o?.evaluating;
@@ -561,6 +563,8 @@ function renderSettings() {
   if (!s) return;
   const o = state.overview;
   const metered = o?.metered ?? false;
+  const evaluators = o?.evaluators ?? [];
+  const primary = evaluators.find((e) => e.found);
   $("#settings-col").innerHTML = `
     <div class="settings-section">
       <h3>Schedule</h3>
@@ -593,23 +597,29 @@ function renderSettings() {
 
     <div class="settings-section">
       <h3>Evaluator</h3>
+      ${evaluators
+        .map(
+          (e, i) => `<div class="setting-row">
+        <label>${i === 0 ? "Runs on" : "Falls back to"}</label>
+        <span style="font-family:var(--mono);font-size:11px">${esc(agentsLabel([e.agent]))} · ${esc(e.model)} · ${esc(e.effort)}${e.found ? "" : " · not installed"}</span>
+      </div>`,
+        )
+        .join("")}
+      <p class="setting-hint">Claude Code evaluates whenever it is installed and the run succeeds. If it is missing or a run fails, the same evidence goes to Codex instead, and the run records which model answered.</p>
       <div class="setting-row">
-        <label>Model</label>
-        <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-5")} · xhigh</span>
-      </div>
-      <div class="setting-row">
-        <label for="set-cost-limit">${metered ? "Stop a run past a $5 cost limit" : "Stop a run past a high usage limit"}</label>
+        <label for="set-cost-limit">${metered ? "Stop a Claude Code run past a $5 cost limit" : "Stop a Claude Code run past a high usage limit"}</label>
         <input type="checkbox" id="set-cost-limit" ${s.cost_limit_enabled ? "checked" : ""}>
       </div>
-      <p class="setting-hint">A safety valve on any single evaluation. Turn off to let a run finish no matter how large (uncapped).</p>
+      <p class="setting-hint">A safety valve on any single Claude Code evaluation; Codex has no equivalent cap. Turn off to let a run finish no matter how large (uncapped).</p>
       <div class="boundary-note">
         <strong>What leaves this Mac:</strong> evaluation runs on your own Claude Code
-        account and sends the prepared evidence package (session excerpts from both
-        Claude Code and Codex, file paths, command results including those from
-        delegated sub-sessions, the names of external tools you used to change
-        something, commit and pull request metadata) to Anthropic — the same boundary
-        as using Claude Code itself. Codex transcripts are only read locally; nothing
-        is sent to OpenAI. ${o?.claude_found ? "" : "<strong>Claude Code CLI was not found — install it or set its path below.</strong>"}
+        account — or on your Codex account when Claude Code is missing or its run fails —
+        and sends the prepared evidence package (session excerpts from both Claude Code
+        and Codex, file paths, command results including those from delegated
+        sub-sessions, the names of external tools you used to change something, commit
+        and pull request metadata) to Anthropic, or to OpenAI for a Codex run — the same
+        boundary as using that tool itself. Transcripts from either tool are only ever
+        read locally. ${primary ? "" : "<strong>Neither the Claude Code nor the Codex CLI was found — install one to run evaluations.</strong>"}
         Z Report has no backend, no analytics, and no telemetry of its own.
       </div>
     </div>
@@ -626,7 +636,7 @@ function renderSettings() {
 
     <div class="settings-section">
       <h3>Recent evaluations</h3>
-      ${renderRuns(state.evalRuns, metered)}
+      ${renderRuns(state.evalRuns, metered, primary ? agentsLabel([primary.agent]) : "")}
     </div>
 
     <div class="settings-section">
@@ -691,7 +701,7 @@ async function loadRuns() {
   state.evalRuns = await api.evalRuns();
 }
 
-function renderRuns(runs: EvalRun[], metered: boolean): string {
+function renderRuns(runs: EvalRun[], metered: boolean, tool: string): string {
   if (runs.length === 0) {
     return `<p class="setting-hint">No evaluations yet.</p>`;
   }
@@ -710,7 +720,7 @@ function renderRuns(runs: EvalRun[], metered: boolean): string {
         </tr>`
       )
       .join("")}
-  </table>${metered ? "" : `<p class="setting-hint">Runs are included in your Claude subscription — no per-run charge.</p>`}`;
+  </table>${metered ? "" : `<p class="setting-hint">Runs are included in your ${tool ? esc(tool) + " " : ""}subscription — no per-run charge.</p>`}`;
 }
 
 /* ---------- actions ---------- */

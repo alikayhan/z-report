@@ -30,6 +30,13 @@ export function agentsLabel(agents: Agent[]): string {
   return agents.map((agent) => AGENT_LABELS[agent]).join(" + ");
 }
 
+export interface EvaluatorInfo {
+  agent: Agent;
+  model: string;
+  effort: string;
+  found: boolean;
+}
+
 export interface RelatedLink {
   kind: "continuation" | "journaled";
   target_id: string;
@@ -113,8 +120,7 @@ export interface Overview {
   last_scan_at: string | null;
   zread_time: string;
   today: string;
-  model: string;
-  claude_found: boolean;
+  evaluators: EvaluatorInfo[];
   metered: boolean;
   app_version: string;
   update: UpdateInfo | null;

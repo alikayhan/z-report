@@ -144,8 +144,10 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         last_scan_at: new Date().toISOString(),
         zread_time: settings.zread_time,
         today,
-        model: "claude-opus-5",
-        claude_found: true,
+        evaluators: [
+          { agent: "claude", model: "claude-opus-5", effort: "xhigh", found: true },
+          { agent: "codex", model: "gpt-5.6-sol", effort: "high", found: true },
+        ],
         metered: false,
         app_version: "0.1.0",
         update: null,

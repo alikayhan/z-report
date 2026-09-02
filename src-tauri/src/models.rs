@@ -32,6 +32,13 @@ impl Agent {
             Agent::Codex => "Codex",
         }
     }
+
+    pub fn vendor(self) -> &'static str {
+        match self {
+            Agent::Claude => "Anthropic",
+            Agent::Codex => "OpenAI",
+        }
+    }
 }
 
 pub fn unique_agents(agents: impl IntoIterator<Item = Agent>) -> Vec<Agent> {

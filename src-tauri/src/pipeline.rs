@@ -1,10 +1,9 @@
-use crate::lifecycle::{ClaudeGuard, Lifecycle};
+use crate::lifecycle::{EvaluatorGuard, Lifecycle};
 use crate::models::*;
 use crate::store::Store;
 use crate::{calendar, evaluator, gitfacts, ingest, related};
 use anyhow::Result;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -16,8 +15,7 @@ const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 pub struct AppState {
     pub store: Mutex<Store>,
     pub lifecycle: Lifecycle,
-    pub claude_found: AtomicBool,
-    pub metered: Mutex<Option<bool>>,
+    pub availability: Mutex<evaluator::Availability>,
 }
 
 pub fn today() -> String {
@@ -130,7 +128,7 @@ pub fn spawn_evaluation(app: AppHandle, kind: &'static str) {
     });
 }
 
-fn evaluate_pending_inner(app: &AppHandle, kind: &str, claude: &ClaudeGuard) -> Result<usize> {
+fn evaluate_pending_inner(app: &AppHandle, kind: &str, busy: &EvaluatorGuard) -> Result<usize> {
     scan(app)?;
     let state = app.state::<AppState>();
     let (settings, pending) = {
@@ -180,7 +178,7 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str, claude: &ClaudeGuard) -> 
             store.insert_eval_run(&run)?;
         }
 
-        match evaluator::evaluate_day(&settings, claude, &day, &substantial) {
+        match evaluator::evaluate_day(&settings, busy, &day, &substantial) {
             Ok(result) => {
                 let candidates = build_candidates(
                     &day,
@@ -195,6 +193,7 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str, claude: &ClaudeGuard) -> 
                 }
                 store.mark_sessions_evaluated(&all_ids)?;
                 run.status = "ok".into();
+                run.error = result.note;
                 run.model = result.model;
                 run.cost_usd = result.cost_usd;
                 run.num_turns = result.num_turns;

@@ -20,8 +20,7 @@ pub struct Overview {
     pub last_scan_at: Option<String>,
     pub zread_time: String,
     pub today: String,
-    pub model: String,
-    pub claude_found: bool,
+    pub evaluators: Vec<evaluator::EvaluatorInfo>,
     pub metered: bool,
     pub app_version: String,
     pub update: Option<UpdateInfo>,
@@ -46,6 +45,7 @@ pub fn overview(app: AppHandle, state: State<AppState>) -> CmdResult<Overview> {
             store.kv_get("last_scan_at"),
         )
     };
+    let availability = state.availability.lock().unwrap().clone();
     Ok(Overview {
         pending,
         session_count,
@@ -53,9 +53,8 @@ pub fn overview(app: AppHandle, state: State<AppState>) -> CmdResult<Overview> {
         last_scan_at,
         zread_time: settings.zread_time,
         today: pipeline::today(),
-        model: evaluator::EVAL_MODEL.into(),
-        claude_found: state.claude_found.load(Ordering::SeqCst),
-        metered: (*state.metered.lock().unwrap()).unwrap_or(false),
+        evaluators: availability.evaluators,
+        metered: availability.metered,
         app_version: app.package_info().version.to_string(),
         update: app.state::<UpdaterState>().info.lock().unwrap().clone(),
         update_ready: app.state::<UpdaterState>().ready.load(Ordering::SeqCst),
@@ -251,9 +250,8 @@ pub fn set_settings(state: State<AppState>, settings: Settings) -> CmdResult<()>
     };
     if path_changed {
         if let Some(busy) = state.lifecycle.begin_probe() {
-            let (found, metered) = evaluator::probe_status(&settings, &busy);
-            state.claude_found.store(found, Ordering::SeqCst);
-            *state.metered.lock().unwrap() = Some(metered);
+            let availability = evaluator::probe(&settings, &busy);
+            *state.availability.lock().unwrap() = availability;
         }
     }
     Ok(())
