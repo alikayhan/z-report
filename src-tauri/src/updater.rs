@@ -1,5 +1,6 @@
 use crate::commands::err;
 use crate::pipeline::AppState;
+use crate::store::Store;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -19,7 +20,16 @@ pub struct UpdaterState {
 }
 
 impl UpdaterState {
-    pub fn new(info: Option<UpdateInfo>) -> Self {
+    // The cache outlives the install it announced, so a restart into the new
+    // version must not keep offering it.
+    pub fn restore(store: &Store, current: &semver::Version) -> Self {
+        let info = store
+            .kv_get("available_update")
+            .and_then(|value| serde_json::from_str::<UpdateInfo>(&value).ok())
+            .filter(|u| semver::Version::parse(&u.version).is_ok_and(|v| v > *current));
+        if info.is_none() {
+            let _ = store.kv_delete("available_update");
+        }
         Self {
             info: Mutex::new(info),
             ready: AtomicBool::new(false),
