@@ -176,7 +176,7 @@ the pushed tag matches it. Bump the version, run `cargo check` so `Cargo.lock` f
 then tag:
 
 ```sh
-git tag -a v0.2.0 -m "What changed, shown as release notes in-app"
+git tag -a v0.2.0 -m "What changed, published as the release notes"
 git push origin v0.2.0
 ```
 
