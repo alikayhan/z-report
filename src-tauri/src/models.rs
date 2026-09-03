@@ -17,9 +17,42 @@ pub fn level_label(level: u8) -> &'static str {
         .unwrap_or(LEVEL_LABELS[0])
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Agent {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Agent {
+    pub fn label(self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex",
+        }
+    }
+
+    pub fn vendor(self) -> &'static str {
+        match self {
+            Agent::Claude => "Anthropic",
+            Agent::Codex => "OpenAI",
+        }
+    }
+}
+
+pub fn unique_agents(agents: impl IntoIterator<Item = Agent>) -> Vec<Agent> {
+    let mut agents: Vec<Agent> = agents.into_iter().collect();
+    agents.sort_unstable();
+    agents.dedup();
+    agents
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionFacts {
     pub session_id: String,
+    #[serde(default)]
+    pub agent: Agent,
     pub file_path: String,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
@@ -193,6 +226,8 @@ pub struct Candidate {
     pub evidence_level: u8,
     pub session_ids: Vec<String>,
     #[serde(default)]
+    pub agents: Vec<Agent>,
+    #[serde(default)]
     pub pr_links: Vec<PrLink>,
     pub repo: Option<String>,
     pub model: Option<String>,
@@ -223,6 +258,7 @@ impl JournalEntry {
             outcomes: candidate.outcomes.clone(),
             evidence_level: candidate.evidence_level,
             session_ids: candidate.session_ids.clone(),
+            agents: candidate.agents.clone(),
             pr_links: candidate.pr_links.clone(),
             repo: candidate.repo.clone(),
             model: candidate.model.clone(),
@@ -243,6 +279,8 @@ pub struct JournalEntry {
     pub outcomes: Vec<Outcome>,
     pub evidence_level: u8,
     pub session_ids: Vec<String>,
+    #[serde(default)]
+    pub agents: Vec<Agent>,
     #[serde(default)]
     pub pr_links: Vec<PrLink>,
     pub repo: Option<String>,

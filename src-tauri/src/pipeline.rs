@@ -1,10 +1,9 @@
-use crate::lifecycle::{ClaudeGuard, Lifecycle};
+use crate::lifecycle::{EvaluatorGuard, Lifecycle};
 use crate::models::*;
 use crate::store::Store;
 use crate::{calendar, evaluator, gitfacts, ingest, related};
 use anyhow::Result;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -16,8 +15,7 @@ const EVIDENCE_PRUNE_SLACK_DAYS: i64 = 7;
 pub struct AppState {
     pub store: Mutex<Store>,
     pub lifecycle: Lifecycle,
-    pub claude_found: AtomicBool,
-    pub metered: Mutex<Option<bool>>,
+    pub availability: Mutex<evaluator::Availability>,
 }
 
 pub fn today() -> String {
@@ -43,9 +41,7 @@ pub fn scan(app: &AppHandle) -> Result<u32> {
         if known.get(&file.session_id).map(String::as_str) == Some(file.content_hash.as_str()) {
             continue;
         }
-        let Ok(mut facts) =
-            ingest::parse_transcript(&file.path, &file.session_id, settings.retain_prompts)
-        else {
+        let Ok(mut facts) = ingest::parse_transcript(file, settings.retain_prompts) else {
             continue;
         };
         gitfacts::correlate(&mut facts);
@@ -132,7 +128,7 @@ pub fn spawn_evaluation(app: AppHandle, kind: &'static str) {
     });
 }
 
-fn evaluate_pending_inner(app: &AppHandle, kind: &str, claude: &ClaudeGuard) -> Result<usize> {
+fn evaluate_pending_inner(app: &AppHandle, kind: &str, busy: &EvaluatorGuard) -> Result<usize> {
     scan(app)?;
     let state = app.state::<AppState>();
     let (settings, pending) = {
@@ -182,7 +178,7 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str, claude: &ClaudeGuard) -> 
             store.insert_eval_run(&run)?;
         }
 
-        match evaluator::evaluate_day(&settings, claude, &day, &substantial) {
+        match evaluator::evaluate_day(&settings, busy, &day, &substantial) {
             Ok(result) => {
                 let candidates = build_candidates(
                     &day,
@@ -197,6 +193,7 @@ fn evaluate_pending_inner(app: &AppHandle, kind: &str, claude: &ClaudeGuard) -> 
                 }
                 store.mark_sessions_evaluated(&all_ids)?;
                 run.status = "ok".into();
+                run.error = result.note;
                 run.model = result.model;
                 run.cost_usd = result.cost_usd;
                 run.num_turns = result.num_turns;
@@ -249,6 +246,7 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
         ordered.iter().flat_map(|c| c.session_ids.iter().cloned()),
         Clone::clone,
     );
+    let agents = unique_agents(ordered.iter().flat_map(|c| c.agents.iter().copied()));
     let day = ordered[0].day.clone();
     let day_end = ordered
         .iter()
@@ -271,6 +269,7 @@ pub fn merge_into_one(parts: &[Candidate]) -> Candidate {
         confidence: parts.iter().map(|c| c.confidence).fold(1.0, f64::min),
         evidence_level: parts.iter().map(|c| c.evidence_level).max().unwrap_or(1),
         session_ids,
+        agents,
         pr_links: unique_pr_links(ordered.iter().flat_map(|c| &c.pr_links)),
         repo: ordered.iter().find_map(|c| c.repo.clone()),
         model: lead.model.clone(),
@@ -472,6 +471,7 @@ fn build_candidates(
             confidence: a.confidence.clamp(0.0, 1.0),
             evidence_level: level,
             session_ids: a.session_ids,
+            agents: unique_agents(cited.iter().map(|s| s.agent)),
             pr_links,
             repo,
             model: model.clone(),
@@ -614,6 +614,7 @@ mod tests {
             confidence: 0.8,
             evidence_level: level,
             session_ids: vec![format!("s-{id}")],
+            agents: vec![Agent::Claude],
             pr_links: vec![],
             repo: Some("/r/synapse".into()),
             model: None,
@@ -712,5 +713,36 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].pr_links, vec![pr]);
+    }
+
+    #[test]
+    fn candidates_and_merges_record_which_agents_did_the_work() {
+        let sessions = vec![
+            SessionFacts {
+                session_id: "s1".into(),
+                agent: Agent::Codex,
+                ..Default::default()
+            },
+            SessionFacts {
+                session_id: "s2".into(),
+                agent: Agent::Claude,
+                ..Default::default()
+            },
+        ];
+        let achievements = vec![Achievement {
+            title: "Wired the release pipeline".into(),
+            contribution: "…".into(),
+            outcomes: vec![],
+            uncertainties: vec![],
+            confidence: 0.9,
+            session_ids: vec!["s1".into(), "s2".into()],
+        }];
+        let candidates = build_candidates("2026-07-20", &sessions, achievements, None);
+        assert_eq!(candidates[0].agents, vec![Agent::Claude, Agent::Codex]);
+
+        let mut codex_only = part("a", "2026-07-19", 2, "Scoped", "One");
+        codex_only.agents = vec![Agent::Codex];
+        let merged = merge_into_one(&[part("b", "2026-07-20", 3, "Built", "Two"), codex_only]);
+        assert_eq!(merged.agents, vec![Agent::Claude, Agent::Codex]);
     }
 }

@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { api, inTauri, levelLabel, Candidate, EvalRun, JournalEntry, Overview, PrLink, Settings } from "./api";
+import { agentsLabel, api, inTauri, levelLabel, Candidate, EvalRun, JournalEntry, Overview, PrLink, Settings } from "./api";
 import "./styles.css";
 
 type View = "review" | "journal" | "export" | "settings";
@@ -138,7 +138,9 @@ function renderSidebar() {
     rows.push(`<div class="srow"><span>Next Z-read</span><b>${esc(o.zread_time)}</b></div>`);
     rows.push(`<div class="srow"><span>Last scan</span><b>${esc(relTime(o.last_scan_at))}</b></div>`);
     rows.push(`<div class="srow"><span>Sessions</span><b>${o.session_count}</b></div>`);
-    if (!o.claude_found) rows.push(`<div class="srow warn"><span>Claude CLI</span><b>missing</b></div>`);
+    if (!o.evaluators.some((e) => e.found)) {
+      rows.push(`<div class="srow warn"><span>Evaluator CLI</span><b>missing</b></div>`);
+    }
   }
   $("#side-status").innerHTML = rows.join("");
   $("#evaluating").hidden = !o?.evaluating;
@@ -170,7 +172,7 @@ function renderQueue() {
   for (const [day, cands] of [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]))) {
     html += `<div class="day-head">${esc(dayHeading(day))}</div>`;
     for (const c of cands) {
-      const meta = [repoName(c.repo), plural(c.session_ids.length, "session")].join(" · ");
+      const meta = metaLine(repoName(c.repo), plural(c.session_ids.length, "session"), agentsLabel(c.agents));
       html += `<div class="row ${c.id === state.selId ? "active" : ""}" data-id="${escAttr(c.id)}" tabindex="0">
         <input type="checkbox" data-sel="${escAttr(c.id)}" title="Select for merge" ${state.selection.has(c.id) ? "checked" : ""}>
         <div><div class="row-title">${esc(c.title)}</div><div class="row-meta">${esc(meta)}</div></div>
@@ -217,6 +219,10 @@ function barcode(): string {
 }
 
 const BARCODE = barcode();
+
+function metaLine(...parts: string[]): string {
+  return parts.filter(Boolean).join(" · ");
+}
 
 function sessionCodes(ids: string[]): string {
   const shown = ids.slice(0, 3).map((s) => s.replace(/-/g, "").slice(0, 8).toUpperCase());
@@ -315,14 +321,18 @@ function renderEmptyReceipt(scroll: HTMLElement, bar: HTMLElement) {
     <p>The till is quiet. ${
       o && o.session_count > 0
         ? `Your next Z-read closes the day at ${esc(o.zread_time)}.`
-        : "Work with Claude Code as usual — achievements appear here after the daily Z-read."
+        : "Work with Claude Code or Codex as usual — achievements appear here after the daily Z-read."
     }</p>
   </div>`;
   bar.innerHTML = "";
 }
 
+function receiptSub(c: Candidate): string {
+  return metaLine(daySpan(c.day, c.day_end), plural(c.session_ids.length, "session"), agentsLabel(c.agents));
+}
+
 function renderEditableReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLElement) {
-  const sub = [daySpan(c.day, c.day_end), plural(c.session_ids.length, "session")].join(" · ");
+  const sub = receiptSub(c);
   const outcomes = state.draftOutcomes!;
   scroll.innerHTML = `<article class="receipt"><div class="tear top"></div><div class="paper">
     <div class="r-store">${esc(repoName(c.repo))}</div>
@@ -347,7 +357,7 @@ function renderEditableReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLEleme
 
 function renderCandidateReceipt(c: Candidate, scroll: HTMLElement, bar: HTMLElement) {
   const span = daySpan(c.day, c.day_end);
-  const sub = [span, plural(c.session_ids.length, "session")].join(" · ");
+  const sub = receiptSub(c);
   const idx = state.pending.findIndex((candidate) => candidate.id === c.id);
   $("#crumb").textContent = `Card ${idx + 1} of ${state.pending.length} · ${span}`;
 
@@ -446,9 +456,12 @@ function renderJournal() {
     } else {
       inner += `<div class="perf"></div><div style="height:16px"></div>`;
     }
-    const metaLeft = [repoName(e.repo), `approved ${e.approved_at.slice(0, 10)}`, e.edited ? "edited" : ""]
-      .filter(Boolean)
-      .join(" · ");
+    const metaLeft = metaLine(
+      repoName(e.repo),
+      agentsLabel(e.agents),
+      `approved ${e.approved_at.slice(0, 10)}`,
+      e.edited ? "edited" : "",
+    );
     const impactUi =
       state.impactForId === e.id
         ? `<div class="impact-form">
@@ -550,6 +563,8 @@ function renderSettings() {
   if (!s) return;
   const o = state.overview;
   const metered = o?.metered ?? false;
+  const evaluators = o?.evaluators ?? [];
+  const primary = evaluators.find((e) => e.found);
   $("#settings-col").innerHTML = `
     <div class="settings-section">
       <h3>Schedule</h3>
@@ -570,7 +585,7 @@ function renderSettings() {
         <label for="set-prompts">Keep prompt excerpts in evidence</label>
         <input type="checkbox" id="set-prompts" ${s.retain_prompts ? "checked" : ""}>
       </div>
-      <p class="setting-hint">Off = only metadata (files, commands, commits) is stored and shown to the evaluator. Full transcripts are never copied; Z Report only references the session files Claude Code already keeps.</p>
+      <p class="setting-hint">Off = only metadata (files, commands, commits) is stored and shown to the evaluator. Full transcripts are never copied; Z Report only references the session files Claude Code and Codex already keep.</p>
       <div class="setting-row">
         <label for="set-retention">Keep unreviewed candidates for</label>
         <input type="number" id="set-retention" min="0" max="3650" value="${s.retention_days}">
@@ -582,21 +597,29 @@ function renderSettings() {
 
     <div class="settings-section">
       <h3>Evaluator</h3>
+      ${evaluators
+        .map(
+          (e, i) => `<div class="setting-row">
+        <label>${i === 0 ? "Runs on" : "Falls back to"}</label>
+        <span style="font-family:var(--mono);font-size:11px">${esc(agentsLabel([e.agent]))} · ${esc(e.model)} · ${esc(e.effort)}${e.found ? "" : " · not installed"}</span>
+      </div>`,
+        )
+        .join("")}
+      <p class="setting-hint">Claude Code evaluates whenever it is installed and the run succeeds. If it is missing or a run fails, the same evidence goes to Codex instead, and the run records which model answered.</p>
       <div class="setting-row">
-        <label>Model</label>
-        <span style="font-family:var(--mono);font-size:11px">${esc(o?.model ?? "claude-opus-5")} · xhigh</span>
-      </div>
-      <div class="setting-row">
-        <label for="set-cost-limit">${metered ? "Stop a run past a $5 cost limit" : "Stop a run past a high usage limit"}</label>
+        <label for="set-cost-limit">${metered ? "Stop a Claude Code run past a $5 cost limit" : "Stop a Claude Code run past a high usage limit"}</label>
         <input type="checkbox" id="set-cost-limit" ${s.cost_limit_enabled ? "checked" : ""}>
       </div>
-      <p class="setting-hint">A safety valve on any single evaluation. Turn off to let a run finish no matter how large (uncapped).</p>
+      <p class="setting-hint">A safety valve on any single Claude Code evaluation; Codex has no equivalent cap. Turn off to let a run finish no matter how large (uncapped).</p>
       <div class="boundary-note">
         <strong>What leaves this Mac:</strong> evaluation runs on your own Claude Code
-        account and sends the prepared evidence package (session excerpts, file paths,
-        command results including those from delegated sub-sessions, the names of
-        external tools you used to change something, commit and pull request
-        metadata) to Anthropic — the same boundary as using Claude Code itself. ${o?.claude_found ? "" : "<strong>Claude Code CLI was not found — install it or set its path below.</strong>"}
+        account — or on your Codex account when Claude Code is missing or its run fails —
+        and sends the prepared evidence package (session excerpts from both Claude Code
+        and Codex, file paths, command results including those from delegated
+        sub-sessions, the names of external tools you used to change something, commit
+        and pull request metadata) to Anthropic, or to OpenAI for a Codex run — the same
+        boundary as using that tool itself. Transcripts from either tool are only ever
+        read locally. ${primary ? "" : "<strong>Neither the Claude Code nor the Codex CLI was found — install one to run evaluations.</strong>"}
         Z Report has no backend, no analytics, and no telemetry of its own.
       </div>
     </div>
@@ -613,7 +636,7 @@ function renderSettings() {
 
     <div class="settings-section">
       <h3>Recent evaluations</h3>
-      ${renderRuns(state.evalRuns, metered)}
+      ${renderRuns(state.evalRuns, metered, primary ? agentsLabel([primary.agent]) : "")}
     </div>
 
     <div class="settings-section">
@@ -678,7 +701,7 @@ async function loadRuns() {
   state.evalRuns = await api.evalRuns();
 }
 
-function renderRuns(runs: EvalRun[], metered: boolean): string {
+function renderRuns(runs: EvalRun[], metered: boolean, tool: string): string {
   if (runs.length === 0) {
     return `<p class="setting-hint">No evaluations yet.</p>`;
   }
@@ -697,7 +720,7 @@ function renderRuns(runs: EvalRun[], metered: boolean): string {
         </tr>`
       )
       .join("")}
-  </table>${metered ? "" : `<p class="setting-hint">Runs are included in your Claude subscription — no per-run charge.</p>`}`;
+  </table>${metered ? "" : `<p class="setting-hint">Runs are included in your ${tool ? esc(tool) + " " : ""}subscription — no per-run charge.</p>`}`;
 }
 
 /* ---------- actions ---------- */

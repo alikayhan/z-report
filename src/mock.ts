@@ -28,6 +28,7 @@ const candidates: Candidate[] = [
     confidence: 0.88,
     evidence_level: 3,
     session_ids: ["s1", "s2"],
+    agents: ["claude", "codex"],
     pr_links: [
       {
         number: 5159,
@@ -56,6 +57,7 @@ const candidates: Candidate[] = [
     confidence: 0.71,
     evidence_level: 1,
     session_ids: ["s3"],
+    agents: ["claude"],
     pr_links: [],
     repo: "/Users/dev/gymondo-ios-app",
     model: "claude-opus-5",
@@ -87,6 +89,7 @@ const journal: JournalEntry[] = [
     ],
     evidence_level: 4,
     session_ids: ["s4"],
+    agents: ["claude"],
     pr_links: [
       {
         number: 12,
@@ -141,8 +144,10 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         last_scan_at: new Date().toISOString(),
         zread_time: settings.zread_time,
         today,
-        model: "claude-opus-5",
-        claude_found: true,
+        evaluators: [
+          { agent: "claude", model: "claude-opus-5", effort: "xhigh", found: true },
+          { agent: "codex", model: "gpt-5.6-sol", effort: "high", found: true },
+        ],
         metered: false,
         app_version: "0.1.0",
         update: null,

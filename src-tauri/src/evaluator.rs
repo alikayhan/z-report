@@ -1,18 +1,40 @@
-use crate::lifecycle::ClaudeGuard;
+use crate::lifecycle::EvaluatorGuard;
 use crate::models::*;
 use crate::store;
 use anyhow::{anyhow, bail, Result};
+use serde::Serialize;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-pub const EVAL_MODEL: &str = "claude-opus-5";
-pub const EVAL_EFFORT: &str = "xhigh";
 const EVAL_TIMEOUT: Duration = Duration::from_secs(900);
 /// Hard per-run safety stop for a runaway evaluation, not a money budget: on a
 /// subscription `--max-budget-usd` caps estimated work, not dollars spent.
 const MAX_BUDGET_USD: f64 = 5.0;
+
+pub fn model_for(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "claude-opus-5",
+        Agent::Codex => "gpt-5.6-sol",
+    }
+}
+
+pub fn effort_for(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "xhigh",
+        Agent::Codex => "high",
+    }
+}
+
+fn cli_name(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "claude",
+        Agent::Codex => "codex",
+    }
+}
 
 pub struct EvalResult {
     pub achievements: Vec<Achievement>,
@@ -20,16 +42,77 @@ pub struct EvalResult {
     pub cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
     pub duration_ms: Option<i64>,
+    pub note: Option<String>,
 }
 
-pub fn find_claude(settings: &Settings) -> Result<PathBuf> {
-    if let Some(p) = &settings.claude_path {
+#[derive(Clone, Serialize)]
+pub struct EvaluatorInfo {
+    pub agent: Agent,
+    pub model: &'static str,
+    pub effort: &'static str,
+    pub found: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub struct Availability {
+    pub evaluators: Vec<EvaluatorInfo>,
+    pub metered: bool,
+}
+
+impl Default for Availability {
+    fn default() -> Self {
+        let evaluators = PRIORITY
+            .iter()
+            .map(|&agent| EvaluatorInfo {
+                agent,
+                model: model_for(agent),
+                effort: effort_for(agent),
+                found: false,
+            })
+            .collect();
+        Self {
+            evaluators,
+            metered: false,
+        }
+    }
+}
+
+// Claude Code has priority; Codex takes over when it is missing or its run fails.
+const PRIORITY: [Agent; 2] = [Agent::Claude, Agent::Codex];
+
+struct Completed {
+    output: Value,
+    model: Option<String>,
+    cost_usd: Option<f64>,
+    num_turns: Option<i64>,
+    duration_ms: Option<i64>,
+}
+
+#[derive(PartialEq)]
+enum JobKind {
+    Evaluation,
+    Rewrite,
+}
+
+struct Job<'a> {
+    kind: JobKind,
+    prompt: &'a str,
+    schema: Value,
+}
+
+pub fn find_cli(agent: Agent, settings: &Settings) -> Result<PathBuf> {
+    if let Some(p) = settings
+        .claude_path
+        .as_ref()
+        .filter(|_| agent == Agent::Claude)
+    {
         let pb = PathBuf::from(p);
         if pb.exists() {
             return Ok(pb);
         }
     }
-    if let Ok(out) = Command::new("/usr/bin/which").arg("claude").output() {
+    let name = cli_name(agent);
+    if let Ok(out) = Command::new("/usr/bin/which").arg(name).output() {
         if out.status.success() {
             let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !p.is_empty() {
@@ -38,84 +121,314 @@ pub fn find_claude(settings: &Settings) -> Result<PathBuf> {
         }
     }
     let home = dirs::home_dir().unwrap_or_default();
+    let bundled = match agent {
+        Agent::Claude => home.join(".claude/local/claude"),
+        Agent::Codex => PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"),
+    };
     for cand in [
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        home.join(".local/bin/claude"),
-        home.join(".claude/local/claude"),
+        PathBuf::from("/opt/homebrew/bin").join(name),
+        PathBuf::from("/usr/local/bin").join(name),
+        home.join(".local/bin").join(name),
+        bundled,
     ] {
         if cand.exists() {
             return Ok(cand);
         }
     }
-    bail!("Claude Code CLI not found. Install it or set its path in Settings.")
+    bail!("{} CLI not found", agent.label())
 }
 
-/// A `claude` invocation with ANTHROPIC_API_KEY stripped, so every run uses the
+/// An evaluator invocation with the vendor API key stripped, so every run uses the
 /// developer's subscription login rather than silently billing an API key.
-fn claude_command(settings: &Settings) -> Result<Command> {
-    let mut cmd = Command::new(find_claude(settings)?);
-    cmd.env_remove("ANTHROPIC_API_KEY");
+fn cli_command(agent: Agent, settings: &Settings) -> Result<Command> {
+    let mut cmd = Command::new(find_cli(agent, settings)?);
+    cmd.env_remove(match agent {
+        Agent::Claude => "ANTHROPIC_API_KEY",
+        Agent::Codex => "OPENAI_API_KEY",
+    });
+    cmd.stdin(Stdio::null());
     Ok(cmd)
 }
 
-fn structured_command(
-    settings: &Settings,
-    prompt: &str,
-    schema: &str,
-    tools: &str,
-    disallowed_tools: &str,
-) -> Result<Command> {
-    let mut cmd = claude_command(settings)?;
-    cmd.args([
-        "-p",
-        prompt,
-        "--model",
-        EVAL_MODEL,
-        "--output-format",
-        "json",
-        "--json-schema",
-        schema,
-        "--tools",
-        tools,
-        "--disallowedTools",
-        disallowed_tools,
-        "--no-session-persistence",
-        "--setting-sources",
-        "",
-    ])
-    .stdin(Stdio::null());
-    Ok(cmd)
+pub fn probe(settings: &Settings, _busy: &EvaluatorGuard) -> Availability {
+    let mut availability = Availability::default();
+    for info in &mut availability.evaluators {
+        info.found = find_cli(info.agent, settings).is_ok();
+    }
+    availability.metered = availability
+        .evaluators
+        .iter()
+        .find(|info| info.found)
+        .is_some_and(|info| metered_login(info.agent, settings));
+    availability
 }
 
 // Only confirmed API-key auth is metered; subscription cost values are estimates.
-pub fn probe_status(settings: &Settings, _claude: &ClaudeGuard) -> (bool, bool) {
-    let Ok(mut cmd) = claude_command(settings) else {
-        return (false, false);
+fn metered_login(agent: Agent, settings: &Settings) -> bool {
+    let Ok(mut cmd) = cli_command(agent, settings) else {
+        return false;
     };
-    let Ok(out) = cmd.args(["auth", "status", "--json"]).output() else {
-        return (true, false);
+    let args: &[&str] = match agent {
+        Agent::Claude => &["auth", "status", "--json"],
+        Agent::Codex => &["login", "status"],
     };
-    if !out.status.success() {
-        return (true, false);
-    }
-    (true, auth_is_metered(&String::from_utf8_lossy(&out.stdout)))
+    let Ok(out) = cmd.args(args).output() else {
+        return false;
+    };
+    let status = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.status.success() && auth_is_metered(agent, &status)
 }
 
-fn auth_is_metered(stdout: &str) -> bool {
-    serde_json::from_str::<Value>(stdout.trim())
+fn with_fallback<T>(
+    settings: &Settings,
+    mut attempt: impl FnMut(Agent) -> Result<T>,
+) -> Result<(T, Option<String>)> {
+    let installed: Vec<Agent> = PRIORITY
+        .into_iter()
+        .filter(|&agent| find_cli(agent, settings).is_ok())
+        .collect();
+    if installed.is_empty() {
+        bail!("No evaluator found. Install the Claude Code or Codex CLI.");
+    }
+    let mut failures: Vec<String> = Vec::new();
+    for agent in installed {
+        match attempt(agent) {
+            Ok(value) => {
+                let note = (!failures.is_empty()).then(|| failures.join(" · "));
+                return Ok((value, note));
+            }
+            Err(e) => failures.push(format!("{}: {e}", agent.label())),
+        }
+    }
+    bail!("{}", failures.join(" · "))
+}
+
+fn auth_is_metered(agent: Agent, status: &str) -> bool {
+    match agent {
+        Agent::Claude => serde_json::from_str::<Value>(status.trim())
+            .ok()
+            .is_some_and(|value| value["authMethod"].as_str() == Some("api-key")),
+        Agent::Codex => status.to_lowercase().contains("api key"),
+    }
+}
+
+fn structured_command(agent: Agent, settings: &Settings, job: &Job, dir: &Path) -> Result<Command> {
+    let mut cmd = cli_command(agent, settings)?;
+    match agent {
+        Agent::Claude => {
+            let (tools, disallowed) = match job.kind {
+                JobKind::Evaluation => (
+                    "Read,Grep,Glob",
+                    "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
+                ),
+                JobKind::Rewrite => (
+                    "",
+                    "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task",
+                ),
+            };
+            cmd.args([
+                "-p",
+                job.prompt,
+                "--model",
+                model_for(agent),
+                "--output-format",
+                "json",
+                "--json-schema",
+                &serde_json::to_string(&job.schema)?,
+                "--tools",
+                tools,
+                "--disallowedTools",
+                disallowed,
+                "--no-session-persistence",
+                "--setting-sources",
+                "",
+            ]);
+            if job.kind == JobKind::Evaluation {
+                cmd.args(["--effort", effort_for(agent)]);
+                if settings.cost_limit_enabled {
+                    cmd.args(["--max-budget-usd", &format!("{MAX_BUDGET_USD:.2}")]);
+                }
+            }
+        }
+        Agent::Codex => {
+            let schema_path = dir.join("schema.json");
+            std::fs::write(&schema_path, serde_json::to_string(&job.schema)?)?;
+            cmd.arg("exec")
+                .args(["--model", model_for(agent)])
+                .args(["-c", "approval_policy=\"never\""])
+                .args(["--sandbox", "read-only"])
+                .args([
+                    "--skip-git-repo-check",
+                    "--ephemeral",
+                    "--ignore-user-config",
+                ])
+                .args(["--color", "never", "--json"])
+                .arg("--output-schema")
+                .arg(&schema_path)
+                .arg("-o")
+                .arg(dir.join("output.json"))
+                .arg("-C")
+                .arg(dir);
+            if job.kind == JobKind::Evaluation {
+                cmd.args([
+                    "-c",
+                    &format!("model_reasoning_effort=\"{}\"", effort_for(agent)),
+                ]);
+            }
+            cmd.arg(job.prompt);
+        }
+    }
+    Ok(cmd)
+}
+
+fn run_dir(name: &str) -> Result<PathBuf> {
+    let dir = store::data_dir().join("eval").join(format!(
+        "{}-{}",
+        name,
+        chrono::Local::now().format("%H%M%S%3f")
+    ));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn run(agent: Agent, settings: &Settings, job: &Job, dir: &Path) -> Result<Completed> {
+    let cmd = structured_command(agent, settings, job, dir)?;
+    let (out, elapsed) = wait_with_timeout(cmd, dir)?;
+    decode(agent, &out, dir, elapsed)
+}
+
+fn wait_with_timeout(mut cmd: Command, dir: &Path) -> Result<(Output, Duration)> {
+    let mut child = cmd
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("failed to launch: {e}"))?;
+    // Drain both pipes while waiting, or a chatty child blocks on a full pipe and never exits.
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() > EVAL_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("timed out after {}s", EVAL_TIMEOUT.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    let out = Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    };
+    Ok((out, started.elapsed()))
+}
+
+fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
+fn decode(agent: Agent, out: &Output, dir: &Path, elapsed: Duration) -> Result<Completed> {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        bail!("{}", classify_failure(agent, &stdout, &stderr));
+    }
+    match agent {
+        Agent::Claude => decode_claude(&stdout, &stderr),
+        Agent::Codex => decode_codex(&stdout, &stderr, dir, elapsed),
+    }
+}
+
+// Claude can report in-band failures with a successful process exit.
+fn decode_claude(stdout: &str, stderr: &str) -> Result<Completed> {
+    let v: Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| anyhow!("unexpected output (not JSON): {}", excerpt(stdout)))?;
+    if v["is_error"].as_bool() == Some(true) {
+        bail!("{}", classify_failure(Agent::Claude, stdout, stderr));
+    }
+    let output = v
+        .get("structured_output")
+        .cloned()
+        .ok_or_else(|| anyhow!("returned no structured output"))?;
+    // modelUsage can include utility turns from small models; record the
+    // model that did the actual work (largest share of run cost).
+    let model = v["modelUsage"].as_object().and_then(|m| {
+        m.iter()
+            .max_by(|a, b| {
+                let ca = a.1["costUSD"].as_f64().unwrap_or(0.0);
+                let cb = b.1["costUSD"].as_f64().unwrap_or(0.0);
+                ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(k, _)| k.clone())
+    });
+    Ok(Completed {
+        output,
+        model,
+        cost_usd: v["total_cost_usd"].as_f64(),
+        num_turns: v["num_turns"].as_i64(),
+        duration_ms: v["duration_ms"].as_i64(),
+    })
+}
+
+// `codex exec --json` streams one event per line; the schema-checked answer lands
+// in the -o file, and a failed turn surfaces as an error event with exit code 0.
+fn decode_codex(stdout: &str, stderr: &str, dir: &Path, elapsed: Duration) -> Result<Completed> {
+    let events: Vec<Value> = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    if let Some(message) = events.iter().find_map(codex_error) {
+        bail!("{}", classify_failure(Agent::Codex, message, stderr));
+    }
+    let output = std::fs::read_to_string(dir.join("output.json"))
         .ok()
-        .is_some_and(|value| value["authMethod"].as_str() == Some("api-key"))
+        .and_then(|text| serde_json::from_str::<Value>(text.trim()).ok())
+        .ok_or_else(|| anyhow!("returned no structured output"))?;
+    let actions = events
+        .iter()
+        .filter(|e| e["type"].as_str() == Some("item.completed"))
+        .count();
+    Ok(Completed {
+        output,
+        model: Some(model_for(Agent::Codex).to_owned()),
+        cost_usd: None,
+        num_turns: Some(actions as i64),
+        duration_ms: Some(elapsed.as_millis() as i64),
+    })
+}
+
+fn codex_error(event: &Value) -> Option<&str> {
+    match event["type"].as_str()? {
+        "error" => event["message"].as_str(),
+        "turn.failed" => event["error"]["message"].as_str(),
+        _ => None,
+    }
 }
 
 fn output_schema() -> Value {
     json!({
         "type": "object",
+        "additionalProperties": false,
         "properties": {
             "achievements": {
                 "type": "array",
                 "items": {
                     "type": "object",
+        "additionalProperties": false,
                     "properties": {
                         "title": { "type": "string", "description": "Short, specific, outcome-first statement; max ~70 characters." },
                         "contribution": { "type": "string", "description": "At most 2-3 plain sentences a teammate who wasn't there could understand: what was done and why it mattered. No jargon or filler; let the outcome bullets carry the specifics." },
@@ -123,6 +436,7 @@ fn output_schema() -> Value {
                             "type": "array",
                             "items": {
                                 "type": "object",
+        "additionalProperties": false,
                                 "properties": {
                                     "claim": { "type": "string", "description": "One concrete outcome as a single scannable bullet line, understandable on its own." },
                                     "evidence_level": { "type": "integer", "minimum": 1, "maximum": 4 },
@@ -139,7 +453,7 @@ fn output_schema() -> Value {
                             "description": "Bare id values of the sessions this achievement draws from (the sessions[].id field, not the session: ref)"
                         }
                     },
-                    "required": ["title", "contribution", "outcomes", "confidence", "session_ids"]
+                    "required": ["title", "contribution", "outcomes", "uncertainties", "confidence", "session_ids"]
                 }
             }
         },
@@ -150,10 +464,11 @@ fn output_schema() -> Value {
 pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
     json!({
         "date": day,
-        "instructions": "Evidence collected locally from Claude Code sessions and Git. Reference facts by their ref ids.",
+        "instructions": "Evidence collected locally from coding-agent sessions (Claude Code, Codex) and Git. Reference facts by their ref ids.",
         "sessions": sessions.iter().map(|s| json!({
             "id": s.session_id,
             "ref": format!("session:{}", s.session_id),
+            "agent": s.agent.label(),
             "session_title": s.title,
             "cwd": s.cwd,
             "repo": s.repo_root,
@@ -204,12 +519,12 @@ pub fn build_evidence_package(day: &str, sessions: &[SessionFacts]) -> Value {
     })
 }
 
-const EVALUATOR_PROMPT: &str = r#"You are the evaluator for Z Report, a private local accomplishment journal. Read ./evidence.json — it contains today's Claude Code session evidence and Git facts for one developer.
+const EVALUATOR_PROMPT: &str = r#"You are the evaluator for Z Report, a private local accomplishment journal. Read ./evidence.json — it contains today's coding-agent session evidence (Claude Code and Codex, see each session's "agent") and Git facts for one developer.
 
 Reconstruct the day's accomplishments as achievements a developer would be proud to put in a standup or performance review. Follow these rules strictly:
 
 1. Celebrate outcomes, not activity. "Fixed flaky auth test that blocked CI" is an achievement; "ran 14 commands" is not.
-2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
+2. Cluster related sessions into a single achievement when they share a repository, branch, files, or a clear narrative thread, regardless of which agent ran them — the developer often carries one piece of work across both tools. Use each session at most once. In session_ids, list the bare session id values, not "session:" refs.
 3. Every outcome claim must cite evidence_refs that literally exist in evidence.json ("session:…", "file:…", "cmd:…", "action:…", "commit:…", "pr:…"). Never invent refs.
 4. Assign each claim the highest evidence level the cited refs support:
    1 = work observed in a session, 2 = a concrete change was produced, 3 = a relevant test/build/check passed, 4 = the change exists in a local commit or has a recorded PR link alongside a file change.
@@ -226,84 +541,38 @@ Return only the structured output."#;
 
 pub fn evaluate_day(
     settings: &Settings,
-    _claude: &ClaudeGuard,
+    _busy: &EvaluatorGuard,
     day: &str,
     sessions: &[SessionFacts],
 ) -> Result<EvalResult> {
-    let run_dir = store::data_dir().join("eval").join(format!(
-        "{}-{}",
-        day,
-        chrono::Local::now().format("%H%M%S")
-    ));
-    std::fs::create_dir_all(&run_dir)?;
+    let dir = run_dir(day)?;
     let package = build_evidence_package(day, sessions);
     std::fs::write(
-        run_dir.join("evidence.json"),
+        dir.join("evidence.json"),
         serde_json::to_string_pretty(&package)?,
     )?;
-
-    let schema = serde_json::to_string(&output_schema())?;
-    let budget = format!("{:.2}", MAX_BUDGET_USD);
-    let mut cmd = structured_command(
-        settings,
-        EVALUATOR_PROMPT,
-        &schema,
-        "Read,Grep,Glob",
-        "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
-    )?;
-    cmd.args(["--effort", EVAL_EFFORT]);
-    if settings.cost_limit_enabled {
-        cmd.args(["--max-budget-usd", &budget]);
-    }
-    let mut child = cmd
-        .current_dir(&run_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
-
-    let started = Instant::now();
-    loop {
-        match child.try_wait()? {
-            Some(_) => break,
-            None => {
-                if started.elapsed() > EVAL_TIMEOUT {
-                    let _ = child.kill();
-                    let _ = std::fs::remove_dir_all(&run_dir);
-                    bail!("evaluation timed out after {}s", EVAL_TIMEOUT.as_secs());
-                }
-                std::thread::sleep(Duration::from_millis(500));
-            }
-        }
-    }
-    let out = child.wait_with_output()?;
-    let _ = std::fs::remove_dir_all(&run_dir);
-    let v = decode_run_output(&out)?;
-    let structured = v
-        .get("structured_output")
-        .cloned()
-        .ok_or_else(|| anyhow!("evaluator returned no structured output"))?;
-    let parsed: EvaluatorOutput = serde_json::from_value(structured)
-        .map_err(|e| anyhow!("evaluator output did not match contract: {e}"))?;
-
-    // modelUsage can include utility turns from small models; record the
-    // model that did the actual work (largest share of run cost).
-    let model = v["modelUsage"].as_object().and_then(|m| {
-        m.iter()
-            .max_by(|a, b| {
-                let ca = a.1["costUSD"].as_f64().unwrap_or(0.0);
-                let cb = b.1["costUSD"].as_f64().unwrap_or(0.0);
-                ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(k, _)| k.clone())
+    let job = Job {
+        kind: JobKind::Evaluation,
+        prompt: EVALUATOR_PROMPT,
+        schema: output_schema(),
+    };
+    let result = with_fallback(settings, |agent| {
+        let done = run(agent, settings, &job, &dir)?;
+        let parsed: EvaluatorOutput = serde_json::from_value(done.output)
+            .map_err(|e| anyhow!("output did not match contract: {e}"))?;
+        Ok(EvalResult {
+            achievements: parsed.achievements,
+            model: done.model,
+            cost_usd: done.cost_usd,
+            num_turns: done.num_turns,
+            duration_ms: done.duration_ms,
+            note: None,
+        })
     });
-    Ok(EvalResult {
-        achievements: parsed.achievements,
-        model,
-        cost_usd: v["total_cost_usd"].as_f64(),
-        num_turns: v["num_turns"].as_i64(),
-        duration_ms: v["duration_ms"].as_i64(),
-    })
+    let _ = std::fs::remove_dir_all(&dir);
+    let (mut result, note) = result?;
+    result.note = note;
+    Ok(result)
 }
 
 const MERGE_PROMPT: &str = r#"Several achievement cards below describe one piece of work the developer carried across more than one day. They were written separately and read as stitched fragments.
@@ -314,85 +583,71 @@ Use only what the cards state. Do not invent outcomes, do not add detail that is
 
 pub fn rewrite_merged(
     settings: &Settings,
-    _claude: &ClaudeGuard,
+    _busy: &EvaluatorGuard,
     parts: &[(String, String)],
 ) -> Result<(String, String)> {
     let cards: Vec<Value> = parts
         .iter()
         .map(|(title, contribution)| json!({ "title": title, "contribution": contribution }))
         .collect();
-    let input = format!(
+    let prompt = format!(
         "{MERGE_PROMPT}\n\nCards:\n{}",
         serde_json::to_string_pretty(&json!({ "cards": cards }))?
     );
-    let schema = serde_json::to_string(&json!({
-        "type": "object",
-        "properties": {
-            "title": { "type": "string" },
-            "contribution": { "type": "string" }
-        },
-        "required": ["title", "contribution"]
-    }))?;
-
-    let out = structured_command(
-        settings,
-        &input,
-        &schema,
-        "",
-        "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task",
-    )?
-    .output()
-    .map_err(|e| anyhow!("failed to launch Claude Code: {e}"))?;
-    let v = decode_run_output(&out)?;
-    let s = v
-        .get("structured_output")
-        .ok_or_else(|| anyhow!("merge rewrite returned no structured output"))?;
-    let (Some(title), Some(contribution)) = (s["title"].as_str(), s["contribution"].as_str())
-    else {
-        bail!("merge rewrite output did not match contract");
+    let job = Job {
+        kind: JobKind::Rewrite,
+        prompt: &prompt,
+        schema: json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "title": { "type": "string" },
+                "contribution": { "type": "string" }
+            },
+            "required": ["title", "contribution"]
+        }),
     };
-    if title.trim().is_empty() || contribution.trim().is_empty() {
-        bail!("merge rewrite returned empty prose");
-    }
-    Ok((title.trim().to_string(), contribution.trim().to_string()))
-}
-
-fn decode_run_output(out: &Output) -> Result<Value> {
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() {
-        bail!("{}", classify_failure(&stdout, &stderr));
-    }
-    parse_run_json(&stdout, &stderr)
-}
-
-// Claude can report in-band failures with a successful process exit.
-fn parse_run_json(stdout: &str, stderr: &str) -> Result<Value> {
-    let v: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
-        anyhow!(
-            "unexpected evaluator output (not JSON): {}",
-            excerpt(stdout)
-        )
-    })?;
-    if v["is_error"].as_bool() == Some(true) {
-        bail!("{}", classify_failure(stdout, stderr));
-    }
-    Ok(v)
+    let dir = run_dir("merge")?;
+    let result = with_fallback(settings, |agent| {
+        let s = run(agent, settings, &job, &dir)?.output;
+        let (Some(title), Some(contribution)) = (s["title"].as_str(), s["contribution"].as_str())
+        else {
+            bail!("merge rewrite output did not match contract");
+        };
+        if title.trim().is_empty() || contribution.trim().is_empty() {
+            bail!("merge rewrite returned empty prose");
+        }
+        Ok((title.trim().to_string(), contribution.trim().to_string()))
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(result?.0)
 }
 
 fn excerpt(s: &str) -> String {
     s.chars().take(300).collect()
 }
 
-fn classify_failure(stdout: &str, stderr: &str) -> String {
+fn classify_failure(agent: Agent, stdout: &str, stderr: &str) -> String {
+    // Codex notes on stderr that stdin is not a terminal; that line is never the failure.
+    let stderr: String = stderr
+        .lines()
+        .filter(|line| !line.contains("Reading additional input from stdin"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let all = format!("{stdout}\n{stderr}").to_lowercase();
     if all.contains("not logged in")
         || all.contains("please run /login")
+        || all.contains("codex login")
         || all.contains("authentication")
+        || all.contains("unauthorized")
         || all.contains("api key")
         || all.contains("oauth")
     {
-        "Claude Code is not authenticated. Open Claude Code and log in, then try again.".into()
+        let fix = match agent {
+            Agent::Claude => "Open Claude Code and log in, then try again.",
+            Agent::Codex => "Run `codex login`, then try again.",
+        };
+        format!("not authenticated. {fix}")
     } else if all.contains("network")
         || all.contains("fetch failed")
         || all.contains("econnrefused")
@@ -400,11 +655,16 @@ fn classify_failure(stdout: &str, stderr: &str) -> String {
         || all.contains("timeout")
         || all.contains("offline")
     {
-        "Could not reach Anthropic. Z-read will retry when you are back online.".into()
+        format!(
+            "could not reach {}. Z-read will retry when you are back online.",
+            agent.vendor()
+        )
     } else if all.contains("budget") {
-        "Evaluation stopped at its per-run safety limit — an unusually large day. It will retry on the next read.".into()
+        "stopped at its per-run safety limit — an unusually large day. It will retry on the next read.".into()
+    } else if stderr.trim().is_empty() {
+        "exited without a result".into()
     } else {
-        format!("Evaluation failed: {}", excerpt(stderr.trim()))
+        excerpt(stderr.trim())
     }
 }
 
@@ -452,6 +712,7 @@ mod tests {
         let pkg = build_evidence_package("2026-07-20", &[facts]);
         let s = pkg["sessions"][0].clone();
         assert_eq!(s["ref"], "session:abc");
+        assert_eq!(s["agent"], "Claude Code");
         assert_eq!(s["commands"][0]["ref"], "cmd:abc:0");
         assert_eq!(s["commands"][0]["delegated"], true);
         assert_eq!(s["external_actions"][0]["ref"], "action:abc:0");
@@ -467,19 +728,95 @@ mod tests {
 
     #[test]
     fn classifies_auth_failure() {
-        let msg = classify_failure("", "Error: not logged in — please run /login");
-        assert!(msg.contains("not authenticated"));
+        let msg = classify_failure(
+            Agent::Claude,
+            "",
+            "Error: not logged in — please run /login",
+        );
+        assert!(msg.starts_with("not authenticated. Open Claude Code"));
+        let msg = classify_failure(Agent::Codex, "", "Not logged in. Run `codex login`.");
+        assert!(msg.starts_with("not authenticated. Run `codex login`"));
+    }
+
+    #[test]
+    fn codex_stdin_notice_is_not_the_failure() {
+        let msg = classify_failure(
+            Agent::Codex,
+            "",
+            "Reading additional input from stdin...\nError: model gpt-5.6-sol is unavailable",
+        );
+        assert_eq!(msg, "Error: model gpt-5.6-sol is unavailable");
+    }
+
+    #[test]
+    fn codex_run_is_decoded_from_events_and_output_file() {
+        let dir = std::env::temp_dir().join("zreport-test/codex-eval");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("output.json"), r#"{"achievements":[]}"#).unwrap();
+        let events = concat!(
+            r#"{"type":"thread.started","thread_id":"t"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"command_execution","command":"cat evidence.json"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}"#,
+            "\n",
+            r#"{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}"#,
+            "\n",
+        );
+
+        let done = decode_codex(events, "", &dir, Duration::from_millis(1500)).unwrap();
+        assert_eq!(done.output, json!({"achievements": []}));
+        assert_eq!(done.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(done.num_turns, Some(2));
+        assert_eq!(done.duration_ms, Some(1500));
+        assert_eq!(done.cost_usd, None);
+
+        let failed = concat!(
+            r#"{"type":"thread.started","thread_id":"t"}"#,
+            "\n",
+            r#"{"type":"turn.failed","error":{"message":"stream disconnected: network error"}}"#,
+            "\n",
+        );
+        let err = decode_codex(failed, "", &dir, Duration::ZERO)
+            .err()
+            .expect("a failed turn is an error");
+        assert!(err.to_string().contains("could not reach OpenAI"));
+    }
+
+    #[test]
+    fn output_schema_is_strict_for_every_backend() {
+        fn closed(v: &Value) -> bool {
+            match v {
+                Value::Object(map) => {
+                    let ok = map.get("type") != Some(&json!("object"))
+                        || (map.get("additionalProperties") == Some(&json!(false))
+                            && map["properties"].as_object().is_some_and(|props| {
+                                map["required"]
+                                    .as_array()
+                                    .is_some_and(|req| req.len() == props.len())
+                            }));
+                    ok && map.values().all(closed)
+                }
+                Value::Array(items) => items.iter().all(closed),
+                _ => true,
+            }
+        }
+        assert!(closed(&output_schema()));
     }
 
     #[test]
     fn only_api_key_auth_is_metered() {
         assert!(auth_is_metered(
+            Agent::Claude,
             r#"{"loggedIn":true,"authMethod":"api-key"}"#
         ));
         assert!(!auth_is_metered(
+            Agent::Claude,
             r#"{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"team"}"#
         ));
-        assert!(!auth_is_metered(r#"{"loggedIn":false}"#));
-        assert!(!auth_is_metered("not json"));
+        assert!(!auth_is_metered(Agent::Claude, r#"{"loggedIn":false}"#));
+        assert!(!auth_is_metered(Agent::Claude, "not json"));
+        assert!(auth_is_metered(Agent::Codex, "Logged in using an API key"));
+        assert!(!auth_is_metered(Agent::Codex, "Logged in using ChatGPT"));
     }
 }

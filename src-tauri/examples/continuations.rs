@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use z_report_lib::ingest;
+use z_report_lib::ingest::{self, DiscoveredFile};
 use z_report_lib::models::SessionFacts;
 use z_report_lib::related::{self, MatchFacts, RELATED_THRESHOLD};
 use z_report_lib::store::Store;
@@ -12,9 +12,9 @@ fn main() -> anyhow::Result<()> {
     let pending = store.candidates_by_status("pending")?;
     eprintln!("{} pending candidate(s)", pending.len());
 
-    let paths: HashMap<String, _> = ingest::discover()
+    let files: HashMap<String, DiscoveredFile> = ingest::discover()
         .into_iter()
-        .map(|f| (f.session_id, f.path))
+        .map(|f| (f.session_id.clone(), f))
         .collect();
     let mut sessions: Vec<SessionFacts> = Vec::new();
     let session_ids: HashSet<&str> = pending
@@ -22,8 +22,8 @@ fn main() -> anyhow::Result<()> {
         .flat_map(|candidate| candidate.session_ids.iter().map(String::as_str))
         .collect();
     for id in session_ids {
-        let Some(path) = paths.get(id) else { continue };
-        if let Ok(facts) = ingest::parse_transcript(path, id, true) {
+        let Some(file) = files.get(id) else { continue };
+        if let Ok(facts) = ingest::parse_transcript(file, true) {
             sessions.push(facts);
         }
     }

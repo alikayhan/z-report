@@ -14,7 +14,6 @@ mod text;
 mod updater;
 
 use pipeline::AppState;
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -89,8 +88,7 @@ pub fn run() {
             app.manage(AppState {
                 store: Mutex::new(store),
                 lifecycle: lifecycle::Lifecycle::default(),
-                claude_found: AtomicBool::new(false),
-                metered: Mutex::new(None),
+                availability: Mutex::new(evaluator::Availability::default()),
             });
             app.manage(updater::UpdaterState::new(cached_update));
 
@@ -101,12 +99,8 @@ pub fn run() {
                     return;
                 };
                 let settings = state.store.lock().unwrap().settings();
-                let (found, metered) = evaluator::probe_status(&settings, &busy);
-                detect
-                    .state::<AppState>()
-                    .claude_found
-                    .store(found, std::sync::atomic::Ordering::SeqCst);
-                *detect.state::<AppState>().metered.lock().unwrap() = Some(metered);
+                let availability = evaluator::probe(&settings, &busy);
+                *detect.state::<AppState>().availability.lock().unwrap() = availability;
                 let _ = detect.emit("zr:refresh", ());
             });
 
