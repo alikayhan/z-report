@@ -110,7 +110,6 @@ export interface Settings {
 
 export interface UpdateInfo {
   version: string;
-  notes: string | null;
 }
 
 export interface Overview {
@@ -153,7 +152,6 @@ export const api = {
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   evalRuns: () => invoke<EvalRun[]>("eval_runs"),
   deleteAllData: () => invoke<void>("delete_all_data"),
-  checkForUpdates: () => invoke<UpdateInfo | null>("check_for_updates"),
   installUpdate: () => invoke<void>("install_update"),
   restartApp: () => invoke<void>("restart_app"),
 };

@@ -133,6 +133,8 @@ const runs: EvalRun[] = [
   },
 ];
 
+const previewUpdate = new URLSearchParams(location.search).get("update");
+
 export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   const respond = (v: unknown) => new Promise((r) => setTimeout(() => r(v), 60));
   switch (cmd) {
@@ -149,9 +151,9 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
           { agent: "codex", model: "gpt-5.6-sol", effort: "high", found: true },
         ],
         metered: false,
-        app_version: "0.1.0",
-        update: null,
-        update_ready: false,
+        app_version: "0.2.0",
+        update: previewUpdate ? { version: "0.3.0" } : null,
+        update_ready: previewUpdate === "ready",
       } satisfies Overview);
     case "candidates":
       return respond(args?.status === "discarded" ? discarded : candidates);

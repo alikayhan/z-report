@@ -143,7 +143,38 @@ function renderSidebar() {
     }
   }
   $("#side-status").innerHTML = rows.join("");
+  $("#side-version").innerHTML = renderVersionRow(o);
   $("#evaluating").hidden = !o?.evaluating;
+}
+
+const icon = (d: string) => `<svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+const ICON_DOWNLOAD = icon("M12 4v11M7 10l5 5 5-5M4 19h16");
+const ICON_REFRESH = icon("M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5");
+const ICON_RESTART = icon("M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0");
+
+function iconButton(act: string, label: string, svg: string): string {
+  return `<button class="update-btn" data-act="${act}" title="${escAttr(label)}" aria-label="${escAttr(label)}">${svg}</button>`;
+}
+
+function progressText(p: { downloaded: number; total: number | null } | null): string {
+  if (!p) return "downloading…";
+  if (p.total) return `${Math.min(100, Math.round((p.downloaded / p.total) * 100))}%`;
+  return `${(p.downloaded / 1048576).toFixed(1)} MB`;
+}
+
+function renderVersionRow(o: Overview | null): string {
+  if (!o) return "";
+  if (o.update_ready) {
+    return `<span>Restart to update</span>${iconButton("restart-app", "Restart to finish updating", ICON_RESTART)}`;
+  }
+  const version = `<span title="Z Report asks GitHub for the latest release about once a day. The check sends nothing about you or your work.">v${esc(o.app_version)}</span>`;
+  if (state.updateBusy) {
+    return `${version}<span class="update-btn busy" title="Installing version ${escAttr(o.update?.version ?? "")}">${ICON_REFRESH}</span><span id="update-progress">${progressText(state.updateProgress)}</span>`;
+  }
+  if (o.update) {
+    return `${version}${iconButton("install-update", `Download version ${o.update.version}`, ICON_DOWNLOAD)}`;
+  }
+  return version;
 }
 
 /* ---------- review: queue list ---------- */
@@ -625,16 +656,6 @@ function renderSettings() {
     </div>
 
     <div class="settings-section">
-      <h3>Updates</h3>
-      <div class="setting-row">
-        <label>Version</label>
-        <span style="font-family:var(--mono);font-size:11px">${esc(o?.app_version ?? "")}</span>
-      </div>
-      ${renderUpdateRow(o)}
-      <p class="setting-hint">Z Report asks GitHub for the latest release about once a day — the check sends nothing about you or your work. An update never installs while an evaluation is running.</p>
-    </div>
-
-    <div class="settings-section">
       <h3>Recent evaluations</h3>
       ${renderRuns(state.evalRuns, metered, primary ? agentsLabel([primary.agent]) : "")}
     </div>
@@ -664,37 +685,6 @@ function renderSettings() {
     (state.settings!.excluded_repos = v.split("\n").map((l) => l.trim()).filter(Boolean))
   );
   bind("set-cost-limit", (v) => (state.settings!.cost_limit_enabled = v === "true"));
-}
-
-function progressText(p: { downloaded: number; total: number | null } | null): string {
-  if (!p) return "downloading…";
-  if (p.total) return `${Math.min(100, Math.round((p.downloaded / p.total) * 100))}%`;
-  return `${(p.downloaded / 1048576).toFixed(1)} MB`;
-}
-
-function renderUpdateRow(o: Overview | null): string {
-  if (o?.update_ready) {
-    return `<div class="setting-row">
-      <label>Update installed — restart to finish</label>
-      <button class="key-ink violet" data-act="restart-app">Restart now</button>
-    </div>`;
-  }
-  if (state.updateBusy) {
-    return `<div class="setting-row">
-      <label>Installing version ${esc(o?.update?.version ?? "")}</label>
-      <span id="update-progress" style="font-family:var(--mono);font-size:11px">${progressText(state.updateProgress)}</span>
-    </div>`;
-  }
-  if (o?.update) {
-    return `<div class="setting-row">
-      <label>Version ${esc(o.update.version)} is available</label>
-      <button class="key-ink violet" data-act="install-update">Install update</button>
-    </div>${o.update.notes ? `<p class="setting-hint">${esc(o.update.notes)}</p>` : ""}`;
-  }
-  return `<div class="setting-row">
-    <label>You're on the latest version</label>
-    <button class="keycap" data-act="check-updates">Check for updates</button>
-  </div>`;
 }
 
 async function loadRuns() {
@@ -809,22 +799,10 @@ async function handleAct(act: string, target: HTMLElement) {
       render();
       break;
     }
-    case "check-updates": {
-      target.setAttribute("disabled", "");
-      try {
-        const info = await api.checkForUpdates();
-        if (state.overview) state.overview.update = info;
-        toast(info ? `Version ${info.version} is available` : "You're on the latest version");
-      } catch (e) {
-        toast(String(e));
-      }
-      renderSettings();
-      break;
-    }
     case "install-update": {
       state.updateBusy = true;
       state.updateProgress = null;
-      renderSettings();
+      renderSidebar();
       try {
         await api.installUpdate();
         toast("Update installed — restart when you're ready");
@@ -833,7 +811,6 @@ async function handleAct(act: string, target: HTMLElement) {
       }
       state.updateBusy = false;
       await refreshOverview();
-      renderSettings();
       break;
     }
     case "restart-app":
@@ -917,11 +894,14 @@ function handleActionEvent(e: Event) {
   if (actEl) void handleAct(actEl.dataset.act!, actEl);
 }
 
-function bindReviewEvents() {
+function bindSidebarEvents() {
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((b) => {
     b.addEventListener("click", () => void switchView(b.dataset.view as View));
   });
+  $("#side-version").addEventListener("click", handleActionEvent);
+}
 
+function bindReviewEvents() {
   $("#rows").addEventListener("click", (e) => {
     const target = e.target as HTMLElement;
     if (target.closest("[data-sel]")) return;
@@ -1134,6 +1114,7 @@ async function bindBackendEvents() {
 }
 
 async function boot() {
+  bindSidebarEvents();
   bindReviewEvents();
   bindJournalEvents();
   bindExportEvents();
