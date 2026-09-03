@@ -1,7 +1,7 @@
 # Homebrew tap for Z Report
 
-[Z Report](https://github.com/alikayhan/z-report-releases) turns your Claude Code
-sessions into a private, evidence-backed journal of what you actually got done. This tap
+[Z Report](https://github.com/alikayhan/z-report-releases) turns your Claude Code and
+Codex sessions into a private, evidence-backed journal of what you actually got done. This tap
 is the quickest way to install it on an Apple Silicon Mac running macOS 13 or newer:
 
 ```sh
@@ -20,8 +20,10 @@ brew install --cask z-report
 The Cask installs the signed, notarized DMG from
 [z-report-releases](https://github.com/alikayhan/z-report-releases) into `/Applications`,
 so it launches with no Gatekeeper prompt. Z Report needs the
-[Claude Code CLI](https://claude.com/product/claude-code) to run evaluations; any install
-works, including `brew install --cask claude-code`.
+[Claude Code CLI](https://claude.com/product/claude-code) or the
+[Codex CLI](https://github.com/openai/codex), signed in, to run evaluations: it uses
+Claude Code when present and falls back to Codex. Any install of either works, including
+`brew install --cask claude-code` or `brew install --cask codex`.
 
 ## Staying current
 
