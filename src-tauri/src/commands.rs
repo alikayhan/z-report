@@ -268,11 +268,6 @@ pub fn eval_runs(state: State<AppState>) -> CmdResult<Vec<EvalRun>> {
 }
 
 #[tauri::command]
-pub async fn check_for_updates(app: AppHandle) -> CmdResult<Option<UpdateInfo>> {
-    updater::check(&app).await
-}
-
-#[tauri::command]
 pub async fn install_update(app: AppHandle) -> CmdResult<()> {
     updater::install(app).await
 }

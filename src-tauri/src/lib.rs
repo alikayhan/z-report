@@ -106,9 +106,10 @@ pub fn run() {
 
             let open = MenuItem::with_id(app, "open", "Open Z Report", true, None::<&str>)?;
             let xread = MenuItem::with_id(app, "xread", "Review now (X-read)", true, None::<&str>)?;
+            let updates = MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Z Report", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &xread, &sep, &quit])?;
+            let menu = Menu::with_items(app, &[&open, &xread, &updates, &sep, &quit])?;
 
             TrayIconBuilder::with_id("zreport-tray")
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
@@ -121,6 +122,7 @@ pub fn run() {
                     "xread" => {
                         pipeline::spawn_evaluation(app.clone(), "xread");
                     }
+                    "updates" => updater::manual_check(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -165,7 +167,6 @@ pub fn run() {
             commands::set_settings,
             commands::eval_runs,
             commands::delete_all_data,
-            commands::check_for_updates,
             commands::install_update,
             commands::restart_app,
         ])
