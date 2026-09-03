@@ -218,13 +218,38 @@ textarea:focus-visible {
   gap: 10px;
 }
 
-.privacy {
+.side-version {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 12px;
+  padding: 0 10px;
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--text-dim);
-  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-btn {
+  display: inline-flex;
+  color: var(--stamp-bright);
+}
+.update-btn:hover {
+  color: var(--paper);
+}
+.update-btn .nav-ico {
+  width: 12px;
+  height: 12px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.update-btn.busy .nav-ico {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ---------- main / views ---------- */
