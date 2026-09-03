@@ -4,7 +4,7 @@
 
 <h1 align="center">Z Report</h1>
 
-<p align="center"><em>Your Claude Code sessions, closed out every evening as a journal of what you actually got done.</em></p>
+<p align="center"><em>Your Claude Code and Codex sessions, closed out every evening as a journal of what you actually got done.</em></p>
 
 <p align="center">
   <a href="#install">Install</a> ·
@@ -18,7 +18,7 @@
 
 You ship more than you remember. By Friday the Tuesday fix is a blur, and the
 performance-review doc is a blank page. Z Report fixes that without asking you to log
-anything: it reads the session transcripts Claude Code already keeps on your Mac,
+anything: it reads the session transcripts Claude Code and Codex already keep on your Mac,
 cross-checks them against your Git history, and hands you a short list of achievements
 to approve, edit, or discard. Approved entries land in a private journal you can export
 as Markdown for standups, weekly updates, or reviews.
@@ -44,14 +44,15 @@ warning to click through.
 **You need:**
 
 - An Apple Silicon Mac on macOS 13 or newer.
-- The [Claude Code CLI](https://claude.com/product/claude-code), installed and signed
-  in. Any install works: the native installer, npm, or `brew install --cask claude-code`.
-  Evaluations run on your own Claude Code account.
+- The [Claude Code CLI](https://claude.com/product/claude-code) or the
+  [Codex CLI](https://github.com/openai/codex), installed and signed in. Any install
+  works, including `brew install --cask claude-code` or `brew install --cask codex`.
+  Evaluations run on your own account: Claude Code when it is present, Codex otherwise.
 
 ## How a day goes
 
-1. **Work as usual.** Every 30 minutes Z Report scans your local Claude Code
-   transcripts and notes the facts: prompts, files changed, commands run and whether
+1. **Work as usual.** Every 30 minutes Z Report scans your local Claude Code and
+   Codex transcripts and notes the facts: prompts, files changed, commands run and whether
    they passed, pull requests opened, connected tools used. Work delegated to
    sub-agents counts as yours.
 2. **Z-read.** At a time you choose, a notification says something like
@@ -87,10 +88,11 @@ Everything, with two exceptions that you are told about up front.
 - All data — evidence, candidates, journal, settings — lives in
   `~/Library/Application Support/com.alikayhan.zreport/` as SQLite. No accounts, no
   sync, no backend, no analytics, no telemetry.
-- **Exception 1 — evaluation.** Each Z-read runs `claude -p` on your own Claude Code
-  account and sends the prepared evidence package (session excerpts, file paths, command
-  results, names of connected tools used, commit and pull request metadata) to
-  Anthropic. It is the same boundary as using Claude Code itself. Arguments passed to
+- **Exception 1 — evaluation.** Each Z-read runs on your own Claude Code account, or on
+  your Codex account when Claude Code is not installed or its run fails, and sends the
+  prepared evidence package (session excerpts, file paths, command results, names of
+  connected tools used, commit and pull request metadata) to Anthropic, or to OpenAI for
+  a Codex run. It is the same boundary as using that tool itself. Arguments passed to
   connected tools are never included; only the server and tool name. Prompt excerpts can
   be turned off in Settings → Privacy.
 - **Exception 2 — update check.** About once a day the app asks GitHub for the latest
