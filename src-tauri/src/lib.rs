@@ -82,15 +82,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let store = store::Store::open_default()?;
-            let cached_update = store
-                .kv_get("available_update")
-                .and_then(|value| serde_json::from_str(&value).ok());
+            let updater_state =
+                updater::UpdaterState::restore(&store, &app.package_info().version);
             app.manage(AppState {
                 store: Mutex::new(store),
                 lifecycle: lifecycle::Lifecycle::default(),
                 availability: Mutex::new(evaluator::Availability::default()),
             });
-            app.manage(updater::UpdaterState::new(cached_update));
+            app.manage(updater_state);
 
             let detect = app.handle().clone();
             std::thread::spawn(move || {
