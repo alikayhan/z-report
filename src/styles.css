@@ -218,11 +218,13 @@ textarea:focus-visible {
   gap: 10px;
 }
 
+/* Mirrors .nav-item's padding, icon box, and gap so the version sits under the
+   Settings label and the update button under the gear. */
 .side-version {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 12px;
+  gap: 7px;
+  min-height: 16px;
   padding: 0 10px;
   font-family: var(--mono);
   font-size: 9px;
@@ -231,25 +233,44 @@ textarea:focus-visible {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
+.side-version .slot {
+  width: 13px;
+  flex: none;
+}
+
+@property --p {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
 
 .update-btn {
   display: inline-flex;
-  color: var(--stamp-bright);
-}
-.update-btn:hover {
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--stamp);
   color: var(--paper);
 }
+.update-btn:hover {
+  background: var(--stamp-bright);
+}
 .update-btn .nav-ico {
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
+  stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.update-btn.busy .nav-ico {
-  animation: spin 1s linear infinite;
+.update-btn.busy {
+  background: linear-gradient(to top, var(--stamp) var(--p), rgba(247, 242, 230, 0.14) 0);
+  transition: --p 0.3s linear;
 }
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.update-btn.busy.indeterminate {
+  animation: blink 1.2s infinite;
 }
 
 /* ---------- main / views ---------- */

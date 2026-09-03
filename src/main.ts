@@ -149,32 +149,36 @@ function renderSidebar() {
 
 const icon = (d: string) => `<svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
 const ICON_DOWNLOAD = icon("M12 4v11M7 10l5 5 5-5M4 19h16");
-const ICON_REFRESH = icon("M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5");
-const ICON_RESTART = icon("M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0");
+const ICON_CHECK = icon("M5 12.5l4.5 4.5L19 7");
 
 function iconButton(act: string, label: string, svg: string): string {
   return `<button class="update-btn" data-act="${act}" title="${escAttr(label)}" aria-label="${escAttr(label)}">${svg}</button>`;
 }
 
-function progressText(p: { downloaded: number; total: number | null } | null): string {
-  if (!p) return "downloading…";
-  if (p.total) return `${Math.min(100, Math.round((p.downloaded / p.total) * 100))}%`;
-  return `${(p.downloaded / 1048576).toFixed(1)} MB`;
+function progressPct(p: { downloaded: number; total: number | null } | null): number | null {
+  return p?.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null;
+}
+
+function applyProgress(btn: HTMLElement, pct: number | null) {
+  btn.classList.toggle("indeterminate", pct == null);
+  btn.style.setProperty("--p", `${pct ?? 100}%`);
 }
 
 function renderVersionRow(o: Overview | null): string {
   if (!o) return "";
+  const version = `<span title="Z Report asks GitHub for the latest release about once a day. The check sends nothing about you or your work.">Version ${esc(o.app_version)}</span>`;
+  const target = o.update?.version ?? "";
   if (o.update_ready) {
-    return `<span>Restart to update</span>${iconButton("restart-app", "Restart to finish updating", ICON_RESTART)}`;
+    return iconButton("restart-app", `Version ${target} is installed — restart to finish`, ICON_CHECK) + version;
   }
-  const version = `<span title="Z Report asks GitHub for the latest release about once a day. The check sends nothing about you or your work.">v${esc(o.app_version)}</span>`;
   if (state.updateBusy) {
-    return `${version}<span class="update-btn busy" title="Installing version ${escAttr(o.update?.version ?? "")}">${ICON_REFRESH}</span><span id="update-progress">${progressText(state.updateProgress)}</span>`;
+    const pct = progressPct(state.updateProgress);
+    return `<span id="update-btn" class="update-btn busy${pct == null ? " indeterminate" : ""}" style="--p:${pct ?? 100}%" title="Downloading version ${escAttr(target)}">${ICON_DOWNLOAD}</span>${version}`;
   }
   if (o.update) {
-    return `${version}${iconButton("install-update", `Download version ${o.update.version}`, ICON_DOWNLOAD)}`;
+    return iconButton("install-update", `Download version ${target}`, ICON_DOWNLOAD) + version;
   }
-  return version;
+  return `<span class="slot"></span>${version}`;
 }
 
 /* ---------- review: queue list ---------- */
@@ -1107,8 +1111,8 @@ async function bindBackendEvents() {
     });
     await listen<{ downloaded: number; total: number | null }>("zr:update-progress", (e) => {
       state.updateProgress = e.payload;
-      const el = document.getElementById("update-progress");
-      if (el) el.textContent = progressText(e.payload);
+      const btn = document.getElementById("update-btn");
+      if (btn) applyProgress(btn, progressPct(e.payload));
     });
   }
 }
