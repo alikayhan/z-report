@@ -105,9 +105,11 @@ data** in Settings erases everything.
 
 ## Updates
 
-Z Report tells you when a new version is out and shows the release notes. It installs
-only when you say so, never while an evaluation is running, and restarts into the new
-version. If you would rather drive it from the terminal:
+Z Report tells you when a new version is out: a notification, and a download button
+beside the version at the bottom of the sidebar. It installs only when you click that
+button, never while an evaluation is running, and restarts into the new version when
+you're ready. "Check for Updates…" lives in the menu bar menu. If you would rather drive
+it from the terminal:
 
 ```sh
 brew upgrade --cask z-report
