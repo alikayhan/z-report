@@ -10,7 +10,8 @@
     "mod:types": "node packaging/claude-code-mod/generate-types.mjs",
     "mod:typecheck": "npm run mod:types && tsc -p mods/claude-code/tsconfig.json",
     "mod:check": "npm run mod:typecheck && CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test mods/claude-code",
-    "mod:test": "cargo test --locked -p z-report-core && cargo build --locked -p z-report-cli && python3 crates/z-report-cli/tests/integration.py"
+    "mod:test": "cargo test --locked -p z-report-core && cargo build --locked -p z-report-cli && python3 crates/z-report-cli/tests/integration.py",
+    "mod:package": "python3 packaging/claude-code-mod/assemble.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

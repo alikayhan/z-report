@@ -47,7 +47,10 @@ jobs:
         run: |
           npm ci
           npm run build
-          cargo test --locked --release --target aarch64-apple-darwin --manifest-path src-tauri/Cargo.toml
+          cargo test --locked --release --workspace --target aarch64-apple-darwin
+          cargo build --locked -p z-report-cli
+          python3 crates/z-report-cli/tests/integration.py
+          npm run mod:typecheck
 
       - name: Import Developer ID certificate
         env:
@@ -92,6 +95,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: Package and notarize Claude Code mod
+        run: npm run mod:package
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+
       - name: Verify app signature and staple
         run: |
           set -euo pipefail
@@ -121,6 +132,7 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release-assets
+          cp dist/claude-code-mod/*.zip release-assets/
           cp "$BUNDLE_DIR"/dmg/*.dmg "release-assets/Z-Report_${VERSION}_aarch64.dmg"
           cp "$BUNDLE_DIR"/macos/*.app.tar.gz "release-assets/Z-Report_${VERSION}_aarch64.app.tar.gz"
           cp "$BUNDLE_DIR"/macos/*.app.tar.gz.sig "release-assets/Z-Report_${VERSION}_aarch64.app.tar.gz.sig"
