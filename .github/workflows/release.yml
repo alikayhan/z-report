@@ -10,7 +10,7 @@ concurrency:
 
 env:
   RELEASE_REPO: alikayhan/z-report-releases
-  BUNDLE_DIR: src-tauri/target/aarch64-apple-darwin/release/bundle
+  BUNDLE_DIR: target/aarch64-apple-darwin/release/bundle
 
 jobs:
   release:

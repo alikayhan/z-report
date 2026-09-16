@@ -1,7 +1,7 @@
 use super::{
-    clean_title, command_fact, describe, each_record, external_action, home, is_transcript,
-    named_branch, push_prompt, record_file_change, set_final_response, update_timestamps,
-    DiscoveredFile,
+    clean_title, command_fact, each_record, external_action, home, is_transcript, named_branch,
+    push_prompt, record_file_change, set_final_response, update_timestamps, DiscoveredFile,
+    Discovery,
 };
 use crate::models::*;
 use anyhow::Result;
@@ -22,9 +22,10 @@ fn supported_version(version: &str) -> bool {
     }
 }
 
-pub(super) fn discover() -> Vec<DiscoveredFile> {
+pub(super) fn discover(discovery: &mut Discovery) -> Vec<DiscoveredFile> {
     let root = home().join(".codex");
     discover_in(
+        discovery,
         &[root.join("sessions"), root.join("archived_sessions")],
         &thread_names(&root.join("session_index.jsonl")),
     )
@@ -49,15 +50,21 @@ enum Thread {
     Skip,
 }
 
-fn classify(path: &Path) -> Thread {
-    let Ok(file) = std::fs::File::open(path) else {
-        return Thread::Skip;
+fn classify(discovery: &mut Discovery, path: &Path) -> Thread {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            discovery.diagnostic(path, &e.to_string());
+            return Thread::Skip;
+        }
     };
     let mut first = String::new();
-    if BufReader::new(file).read_line(&mut first).is_err() {
+    if let Err(e) = BufReader::new(file).read_line(&mut first) {
+        discovery.diagnostic(path, &e.to_string());
         return Thread::Skip;
     }
     let Ok(record) = serde_json::from_str::<Value>(&first) else {
+        discovery.diagnostic(path, "Malformed session metadata");
         return Thread::Skip;
     };
     if record["type"].as_str() != Some("session_meta") {
@@ -85,15 +92,12 @@ fn classify(path: &Path) -> Thread {
     }
 }
 
-fn transcripts_under(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
+fn transcripts_under(discovery: &mut Discovery, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    for entry in discovery.entries(dir) {
         let path = entry.path();
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             if depth < MAX_DEPTH {
-                transcripts_under(&path, depth + 1, out);
+                transcripts_under(discovery, &path, depth + 1, out);
             }
         } else if is_transcript(&path) {
             out.push(path);
@@ -116,15 +120,19 @@ fn descendants(
     }
 }
 
-fn discover_in(roots: &[PathBuf], names: &HashMap<String, String>) -> Vec<DiscoveredFile> {
+fn discover_in(
+    discovery: &mut Discovery,
+    roots: &[PathBuf],
+    names: &HashMap<String, String>,
+) -> Vec<DiscoveredFile> {
     let mut paths = Vec::new();
     for root in roots {
-        transcripts_under(root, 0, &mut paths);
+        transcripts_under(discovery, root, 0, &mut paths);
     }
     let mut sessions: Vec<(String, PathBuf)> = Vec::new();
     let mut children: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
     for path in paths {
-        match classify(&path) {
+        match classify(discovery, &path) {
             Thread::Session { id } => sessions.push((id, path)),
             Thread::Delegate { id, parent } => children.entry(parent).or_default().push((id, path)),
             Thread::Skip => {}
@@ -136,7 +144,7 @@ fn discover_in(roots: &[PathBuf], names: &HashMap<String, String>) -> Vec<Discov
             let mut delegates = Vec::new();
             descendants(&children, &id, 0, &mut delegates);
             delegates.sort();
-            describe(
+            discovery.describe(
                 Agent::Codex,
                 path,
                 id.clone(),
@@ -327,14 +335,15 @@ mod tests {
     }
 
     fn parse_file(path: &Path, title: Option<&str>, retain_prompts: bool) -> SessionFacts {
-        let file = describe(
-            Agent::Codex,
-            path.to_path_buf(),
-            SESSION.to_owned(),
-            title.map(String::from),
-            vec![],
-        )
-        .unwrap();
+        let file = Discovery::default()
+            .describe(
+                Agent::Codex,
+                path.to_path_buf(),
+                SESSION.to_owned(),
+                title.map(String::from),
+                vec![],
+            )
+            .unwrap();
         crate::ingest::parse_transcript(&file, retain_prompts).unwrap()
     }
 
@@ -529,6 +538,7 @@ mod tests {
         let names = HashMap::from([(SESSION.to_owned(), "Ship the Homebrew cask".to_owned())]);
 
         let mut found = discover_in(
+            &mut Discovery::default(),
             &[root.join("sessions"), root.join("archived_sessions")],
             &names,
         );
@@ -582,13 +592,18 @@ mod tests {
             &format!("rollout-2026-05-22T23-27-13-{SESSION}.jsonl"),
             &[meta(SESSION, "/tmp/repo", "main", "").replace("0.149.0", "0.146.0")],
         );
-        assert!(matches!(classify(&old), Thread::Skip));
+        assert!(matches!(
+            classify(&mut Discovery::default(), &old),
+            Thread::Skip
+        ));
         let current = write(
             "current",
             &format!("rollout-2026-08-23T12-45-23-{SESSION}.jsonl"),
             &thread_lines(),
         );
-        assert!(matches!(classify(&current), Thread::Session { id } if id == SESSION));
+        assert!(
+            matches!(classify(&mut Discovery::default(),&current), Thread::Session { id } if id == SESSION)
+        );
     }
 
     #[test]

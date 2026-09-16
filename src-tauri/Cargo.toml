@@ -12,6 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+z-report-core = { path = "../crates/z-report-core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 semver = "1"
 tauri-plugin-notification = "2"
@@ -19,16 +20,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
-dirs = "6"
 anyhow = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSResponder"] }
 objc2-foundation = { version = "0.3", features = ["NSData"] }
-
-[profile.release]
-strip = true
-lto = true

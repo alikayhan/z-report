@@ -1,20 +1,12 @@
-mod calendar;
+pub use z_report_core::{
+    calendar, evaluator, export, gitfacts, ingest, lifecycle, models, related, store,
+};
 mod commands;
-pub mod evaluator;
-pub mod export;
-pub mod gitfacts;
-pub mod ingest;
-pub mod lifecycle;
-pub mod models;
 pub mod pipeline;
-pub mod related;
 mod scheduler;
-pub mod store;
-mod text;
 mod updater;
 
 use pipeline::AppState;
-use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -82,13 +74,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let store = store::Store::open_default()?;
-            let updater_state =
-                updater::UpdaterState::restore(&store, &app.package_info().version);
-            app.manage(AppState {
-                store: Mutex::new(store),
-                lifecycle: lifecycle::Lifecycle::default(),
-                availability: Mutex::new(evaluator::Availability::default()),
-            });
+            let updater_state = updater::UpdaterState::restore(&store, &app.package_info().version);
+            app.manage(AppState::new(store));
             app.manage(updater_state);
 
             let detect = app.handle().clone();
@@ -105,7 +92,8 @@ pub fn run() {
 
             let open = MenuItem::with_id(app, "open", "Open Z Report", true, None::<&str>)?;
             let xread = MenuItem::with_id(app, "xread", "Review now (X-read)", true, None::<&str>)?;
-            let updates = MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
+            let updates =
+                MenuItem::with_id(app, "updates", "Check for Updates…", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Z Report", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &xread, &updates, &sep, &quit])?;
@@ -150,6 +138,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::overview,
             commands::run_xread,
+            commands::cancel_xread,
             commands::candidates,
             commands::update_candidate,
             commands::approve_candidate,

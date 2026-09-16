@@ -26,6 +26,9 @@ secrets*
 tmp/
 scratch/
 
+# Python
+__pycache__/
+
 # node
 node_modules/
 npm-debug.log*
@@ -33,10 +36,14 @@ yarn-error.log*
 
 # rust / tauri build output
 src-tauri/target/
+target/
+mods/claude-code/bin/
+mods/claude-code/types/
+mods/claude-code/compatibility.json
 src-tauri/gen/schemas/
 dist/
 
-# local databases (app data lives in ~/Library/Application Support/com.zreport.app)
+# local databases (app data lives in ~/Library/Application Support/com.alikayhan.zreport)
 *.db
 *.sqlite*
 *.db-journal

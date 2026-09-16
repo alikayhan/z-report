@@ -1,14 +1,23 @@
+mod reads;
+mod review;
+
 use crate::models::*;
 use anyhow::{anyhow, Result};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+pub const DATABASE_VERSION: u32 = 1;
+
 pub struct Store {
     conn: Connection,
+    pub path: PathBuf,
 }
 
 pub fn data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("Z_REPORT_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.alikayhan.zreport")
@@ -37,11 +46,28 @@ impl Store {
     }
 
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        let path = path.as_ref().to_path_buf();
+        let conn = Connection::open(&path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        anyhow::ensure!(
+            version <= i64::from(DATABASE_VERSION),
+            "Database requires a newer Z Report engine (schema {version})"
+        );
+        conn.create_scalar_function(
+            "zreport_writer_version",
+            0,
+            rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |_| Ok(i64::from(DATABASE_VERSION)),
+        )?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        if version == i64::from(DATABASE_VERSION) {
+            return Ok(Self { conn, path });
+        }
+        let migration =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA foreign_keys=ON;
-             CREATE TABLE IF NOT EXISTS sessions (
+            "CREATE TABLE IF NOT EXISTS sessions (
                id TEXT PRIMARY KEY,
                file_path TEXT NOT NULL,
                day TEXT,
@@ -129,7 +155,43 @@ impl Store {
                dismissed_at TEXT NOT NULL
              );",
         )?;
-        Ok(Self { conn })
+        add_column_if_missing(
+            &conn,
+            "candidates",
+            "revision",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(
+            &conn,
+            "candidates",
+            "protected",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        add_column_if_missing(&conn, "eval_runs", "cycle_id", "TEXT")?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS read_cycles (
+          id TEXT PRIMARY KEY, origin TEXT NOT NULL, status TEXT NOT NULL, owner TEXT NOT NULL,
+          started_at TEXT NOT NULL, finished_at TEXT, heartbeat_at TEXT, cancel_requested INTEGER NOT NULL DEFAULT 0,
+          completed_days INTEGER NOT NULL DEFAULT 0, total_days INTEGER NOT NULL DEFAULT 0,
+          candidate_count INTEGER NOT NULL DEFAULT 0, message TEXT NOT NULL DEFAULT '', scan TEXT);
+          CREATE TABLE IF NOT EXISTS read_evidence (cycle_id TEXT NOT NULL, session_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+          PRIMARY KEY(cycle_id,session_id)); PRAGMA user_version=1;")?;
+        for table in [
+            "sessions",
+            "candidates",
+            "journal",
+            "eval_runs",
+            "kv",
+            "dismissed_links",
+            "read_cycles",
+            "read_evidence",
+        ] {
+            for operation in ["INSERT", "UPDATE", "DELETE"] {
+                conn.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS writer_{table}_{operation} BEFORE {operation} ON {table}
+                BEGIN SELECT CASE WHEN zreport_writer_version() < 1 THEN RAISE(ABORT, 'Upgrade Z Report before writing this database') END; END;"))?;
+            }
+        }
+        migration.commit()?;
+        Ok(Self { conn, path })
     }
 
     pub fn kv_get(&self, key: &str) -> Option<String> {
@@ -161,7 +223,27 @@ impl Store {
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
-        self.kv_set("settings", &serde_json::to_string(s)?)
+        chrono::NaiveTime::parse_from_str(&s.zread_time, "%H:%M")?;
+        anyhow::ensure!(
+            s.scan_interval_min > 0 && s.retention_days <= 3650,
+            "Invalid settings"
+        );
+        anyhow::ensure!(
+            s.excluded_repos.iter().all(|p| Path::new(p).is_absolute()),
+            "Repository exclusions must be absolute paths"
+        );
+        self.transaction(|| {
+            if !s.retain_prompts {
+                self.conn.execute(
+                    "UPDATE sessions SET facts=json_set(facts,'$.prompts',json('[]'),'$.final_response',NULL,'$.title',NULL)
+                     WHERE json_extract(facts,'$.prompts') IS NOT '[]'
+                        OR json_extract(facts,'$.final_response') IS NOT NULL
+                        OR json_extract(facts,'$.title') IS NOT NULL",
+                    [],
+                )?;
+            }
+            self.kv_set("settings", &serde_json::to_string(s)?)
+        })
     }
 
     pub fn session_hash(&self, id: &str) -> Option<(String, String)> {
@@ -221,7 +303,13 @@ impl Store {
         day: &str,
         content_hash: &str,
     ) -> Result<bool> {
-        let json = serde_json::to_string(facts)?;
+        let mut facts = facts.clone();
+        if !self.settings().retain_prompts {
+            facts.prompts.clear();
+            facts.final_response = None;
+            facts.title = None;
+        }
+        let json = serde_json::to_string(&facts)?;
         let prior: Option<String> = self
             .conn
             .query_row(
@@ -244,20 +332,8 @@ impl Store {
             )?;
             return Ok(false);
         }
-        self.upsert_session_json(facts, day, content_hash, &json)?;
+        self.upsert_session_json(&facts, day, content_hash, &json)?;
         Ok(true)
-    }
-
-    pub fn mark_sessions_evaluated(&self, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let placeholders = vec!["?"; ids.len()].join(",");
-        let sql =
-            format!("UPDATE sessions SET evaluated_hash=content_hash WHERE id IN ({placeholders})");
-        self.conn
-            .execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
-        Ok(())
     }
 
     pub fn pending_sessions(
@@ -276,9 +352,7 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (day, facts) = row?;
-            if let Ok(f) = serde_json::from_str::<SessionFacts>(&facts) {
-                out.push((day, f));
-            }
+            out.push((day, serde_json::from_str::<SessionFacts>(&facts)?));
         }
         Ok(out)
     }
@@ -313,6 +387,7 @@ impl Store {
 
     fn row_to_candidate(r: &rusqlite::Row) -> rusqlite::Result<Candidate> {
         Ok(Candidate {
+            revision: r.get(17)?,
             id: r.get(0)?,
             day: r.get(1)?,
             day_end: r.get(2)?,
@@ -335,7 +410,7 @@ impl Store {
         })
     }
 
-    const CANDIDATE_COLS: &'static str = "id,day,day_end,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,related,created_at,agents";
+    const CANDIDATE_COLS: &'static str = "id,day,day_end,title,contribution,outcomes,uncertainties,confidence,evidence_level,session_ids,pr_links,repo,model,status,related,created_at,agents,revision";
 
     pub fn candidates_by_status(&self, status: &str) -> Result<Vec<Candidate>> {
         let sql = format!(
@@ -357,20 +432,6 @@ impl Store {
             .map_err(|e| anyhow!("candidate not found: {e}"))
     }
 
-    pub fn update_candidate_fields(
-        &self,
-        id: &str,
-        title: &str,
-        contribution: &str,
-        outcomes: &[Outcome],
-    ) -> Result<()> {
-        self.conn.execute(
-            "UPDATE candidates SET title=?2, contribution=?3, outcomes=?4 WHERE id=?1",
-            params![id, title, contribution, serde_json::to_string(outcomes)?],
-        )?;
-        Ok(())
-    }
-
     pub fn set_candidate_status(
         &self,
         id: &str,
@@ -378,7 +439,7 @@ impl Store {
         merged_into: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE candidates SET status=?2, merged_into=?3 WHERE id=?1",
+            "UPDATE candidates SET status=?2, merged_into=?3, revision=revision+1, protected=1 WHERE id=?1",
             params![id, status, merged_into],
         )?;
         Ok(())
@@ -386,7 +447,7 @@ impl Store {
 
     pub fn delete_pending_for_sessions(&self, day: &str, session_ids: &[String]) -> Result<()> {
         let sql = format!(
-            "SELECT {} FROM candidates WHERE day=?1 AND status='pending'",
+            "SELECT {} FROM candidates WHERE day=?1 AND status='pending' AND protected=0",
             Self::CANDIDATE_COLS
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -624,11 +685,11 @@ impl Store {
     }
 
     pub fn wipe_all(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "DELETE FROM sessions; DELETE FROM candidates; DELETE FROM journal;
-             DELETE FROM eval_runs; DELETE FROM kv; DELETE FROM dismissed_links;",
-        )?;
-        Ok(())
+        self.transaction(|| {
+            self.conn.execute_batch("DELETE FROM sessions; DELETE FROM candidates; DELETE FROM journal;
+                DELETE FROM eval_runs; DELETE FROM kv; DELETE FROM dismissed_links; DELETE FROM read_evidence; DELETE FROM read_cycles;")?;
+            Ok(())
+        })
     }
 }
 
@@ -638,6 +699,7 @@ mod tests {
 
     fn candidate(id: &str, day: &str, status: &str) -> Candidate {
         Candidate {
+            revision: 0,
             id: id.into(),
             day: day.into(),
             day_end: None,
@@ -884,7 +946,9 @@ mod tests {
         assert!(store
             .upsert_session_if_changed(&facts, "2026-07-20", "100:1")
             .unwrap());
-        store.mark_sessions_evaluated(&["s1".to_string()]).unwrap();
+        store
+            .mark_snapshots(&[("s1".to_string(), "100:1".to_string())])
+            .unwrap();
         assert_eq!(window(), 0);
 
         assert!(!store
@@ -949,5 +1013,199 @@ mod tests {
         assert_eq!(store.delete_sessions_missing_from(&live).unwrap(), 1);
         assert!(store.session_hash("live").is_some());
         assert!(store.session_hash("orphan").is_none());
+    }
+    #[test]
+    fn approval_is_atomic_and_idempotent() {
+        let s = Store::open(":memory:").unwrap();
+        s.insert_candidate(&candidate("c", "2026-09-15", "pending"))
+            .unwrap();
+        s.conn.execute_batch("CREATE TRIGGER reject_status BEFORE UPDATE ON candidates BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(s.approve("c", Some(0), false).is_err());
+        assert!(s
+            .journal_range("2020-01-01", "2030-01-01", None)
+            .unwrap()
+            .is_empty());
+        assert_eq!(s.candidate("c").unwrap().status, "pending");
+        s.conn.execute_batch("DROP TRIGGER reject_status").unwrap();
+        assert_eq!(s.approve("c", Some(0), false).unwrap(), "j-c");
+        assert_eq!(s.approve("c", Some(0), false).unwrap(), "j-c");
+        assert_eq!(
+            s.journal_range("2020-01-01", "2030-01-01", None)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn merge_failure_leaves_every_source_pending() {
+        let s = Store::open(":memory:").unwrap();
+        for id in ["a", "b"] {
+            s.insert_candidate(&candidate(id, "2026-09-15", "pending"))
+                .unwrap();
+        }
+        s.conn.execute_batch("CREATE TRIGGER reject_second BEFORE UPDATE ON candidates WHEN NEW.id='b' BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(s.merge(&["a".into(), "b".into()], Some(&[0, 0])).is_err());
+        assert_eq!(s.candidates_by_status("pending").unwrap().len(), 2);
+        assert!(s.candidates_by_status("merged").unwrap().is_empty());
+    }
+
+    #[test]
+    fn result_commit_preserves_edits_and_exact_selected_hash() {
+        let s = Store::open(":memory:").unwrap();
+        s.upsert_session(&session("s1"), "2026-09-15", "v1")
+            .unwrap();
+        let snapshots = s.pending_snapshots("2026-09-15", "2026-09-15").unwrap();
+        s.upsert_session(&session("s1"), "2026-09-15", "v2")
+            .unwrap();
+        s.insert_candidate(&candidate("edited", "2026-09-15", "pending"))
+            .unwrap();
+        s.edit_candidate("edited", Some(0), "Human title", "Human contribution", &[])
+            .unwrap();
+        s.queue_read("read", "xread", "test", "2026-09-15T10:00:00Z")
+            .unwrap();
+        s.replace_day(
+            "read",
+            "2026-09-15",
+            &[("s1".into(), snapshots[0].2.clone())],
+            &[candidate("new", "2026-09-15", "pending")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(s.candidate("edited").unwrap().title, "Human title");
+        assert_eq!(s.session_hash("s1").unwrap(), ("v2".into(), "v1".into()));
+        assert_eq!(
+            s.pending_snapshots("2026-09-15", "2026-09-15")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            s.read_cycle(Some("read")).unwrap().unwrap().completed_days,
+            1
+        );
+    }
+
+    #[test]
+    fn failed_result_commit_rolls_back_hash_and_candidates() {
+        let s = Store::open(":memory:").unwrap();
+        s.upsert_session(&session("s1"), "2026-09-15", "v1")
+            .unwrap();
+        s.insert_candidate(&candidate("old", "2026-09-15", "pending"))
+            .unwrap();
+        s.queue_read("read", "xread", "test", "2026-09-15T10:00:00Z")
+            .unwrap();
+        s.conn.execute_batch("CREATE TRIGGER reject_evidence BEFORE INSERT ON read_evidence BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+        assert!(s
+            .replace_day(
+                "read",
+                "2026-09-15",
+                &[("s1".into(), "v1".into())],
+                &[candidate("new", "2026-09-15", "pending")],
+                None
+            )
+            .is_err());
+        assert!(s.candidate("old").is_ok());
+        assert!(s.candidate("new").is_err());
+        assert_eq!(s.session_hash("s1").unwrap().1, "");
+        assert_eq!(
+            s.read_cycle(Some("read")).unwrap().unwrap().completed_days,
+            0
+        );
+    }
+
+    #[test]
+    fn review_conflicts_across_connections_and_old_writers_fail_closed() {
+        let path = std::env::temp_dir().join(format!("zreport-{}.db", crate::engine::new_id()));
+        let a = Store::open(&path).unwrap();
+        let b = Store::open(&path).unwrap();
+        a.insert_candidate(&candidate("c", "2026-09-15", "pending"))
+            .unwrap();
+        b.edit_candidate("c", Some(0), "changed", "body", &[])
+            .unwrap();
+        assert!(a
+            .approve("c", Some(0), false)
+            .unwrap_err()
+            .to_string()
+            .starts_with("conflict:"));
+        let legacy = Connection::open(&path).unwrap();
+        assert!(legacy.execute("DELETE FROM candidates", []).is_err());
+        a.approve("c", Some(1), true).unwrap();
+        assert_eq!(b.candidate("c").unwrap().status, "approved");
+        drop((a, b, legacy));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn newer_schema_is_rejected_before_any_writes() {
+        let path = std::env::temp_dir().join(format!("zreport-{}.db", crate::engine::new_id()));
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("PRAGMA user_version=99").unwrap();
+        drop(raw);
+        assert!(Store::open(&path).is_err());
+        let raw = Connection::open(&path).unwrap();
+        let tables: i64 = raw
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+        drop(raw);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn auto_eligibility_uses_elapsed_time_throttle_and_cooldown() {
+        let s = Store::open(":memory:").unwrap();
+        let now = chrono::Utc::now();
+        assert!(!s.auto_due(now, true).unwrap());
+        s.kv_set("read_initialized", "true").unwrap();
+        s.kv_set(
+            "last_successful_read_at",
+            &(now - chrono::Duration::hours(23)).to_rfc3339(),
+        )
+        .unwrap();
+        assert!(!s.auto_due(now, false).unwrap());
+        s.kv_set(
+            "last_successful_read_at",
+            &(now - chrono::Duration::hours(24)).to_rfc3339(),
+        )
+        .unwrap();
+        assert!(s.auto_due(now, true).unwrap());
+        assert!(!s.auto_due(now, true).unwrap());
+        assert!(s
+            .auto_due(now + chrono::Duration::minutes(15), true)
+            .unwrap());
+        s.kv_set(
+            "retry_after",
+            &(now + chrono::Duration::minutes(30)).to_rfc3339(),
+        )
+        .unwrap();
+        assert!(!s.auto_due(now, false).unwrap());
+        assert!(s
+            .auto_due(now + chrono::Duration::minutes(30), false)
+            .unwrap());
+        let mut settings = s.settings();
+        settings.auto_catchup = false;
+        s.save_settings(&settings).unwrap();
+        assert!(!s.auto_due(now + chrono::Duration::days(1), false).unwrap());
+    }
+
+    #[test]
+    fn failures_and_cancellation_do_not_advance_freshness() {
+        let s = Store::open(":memory:").unwrap();
+        s.queue_read("r", "xread", "test", "2026-09-15T10:00:00Z")
+            .unwrap();
+        for status in ["failed", "cancelled", "interrupted", "busy"] {
+            s.finish_read("r", status, "test").unwrap();
+            assert!(s.kv_get("last_successful_read_at").is_none());
+            assert!(s.kv_get("read_initialized").is_none());
+        }
+        s.finish_read("r", "completed", "test").unwrap();
+        assert!(s.kv_get("last_successful_read_at").is_some());
+        assert_eq!(s.kv_get("read_initialized").as_deref(), Some("true"));
+        assert!(s.kv_get("retry_after").is_none());
     }
 }

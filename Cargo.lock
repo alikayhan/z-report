@@ -5412,11 +5412,9 @@ version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",
- "dirs",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "rusqlite",
  "semver",
  "serde",
  "serde_json",
@@ -5425,6 +5423,33 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tauri-plugin-updater",
+ "z-report-core",
+]
+
+[[package]]
+name = "z-report-cli"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "z-report-core",
+]
+
+[[package]]
+name = "z-report-core"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -3,8 +3,9 @@ mod codex;
 
 use crate::models::*;
 use crate::text;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 const MAX_PROMPTS: usize = 25;
@@ -24,9 +25,19 @@ pub struct DiscoveredFile {
 }
 
 pub fn discover() -> Vec<DiscoveredFile> {
-    let mut out = claude::discover();
-    out.extend(codex::discover());
-    out
+    discover_checked().0
+}
+
+pub fn discover_checked() -> (Vec<DiscoveredFile>, Vec<String>) {
+    let mut discovery = Discovery::default();
+    let mut files = claude::discover(&mut discovery);
+    files.extend(codex::discover(&mut discovery));
+    (files, discovery.diagnostics)
+}
+
+#[derive(Default)]
+struct Discovery {
+    diagnostics: Vec<String>,
 }
 
 pub fn parse_transcript(file: &DiscoveredFile, retain_prompts: bool) -> Result<SessionFacts> {
@@ -45,6 +56,7 @@ pub fn parse_transcript(file: &DiscoveredFile, retain_prompts: bool) -> Result<S
     if !retain_prompts {
         facts.prompts.clear();
         facts.final_response = None;
+        facts.title = None;
     } else if facts.title.is_none() {
         facts.title = facts.prompts.first().and_then(|prompt| clean_title(prompt));
     }
@@ -52,6 +64,9 @@ pub fn parse_transcript(file: &DiscoveredFile, retain_prompts: bool) -> Result<S
 }
 
 fn home() -> PathBuf {
+    if let Some(dir) = std::env::var_os("Z_REPORT_TRANSCRIPT_HOME") {
+        return PathBuf::from(dir);
+    }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -67,52 +82,109 @@ fn is_transcript(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "jsonl")
 }
 
-fn describe(
-    agent: Agent,
-    path: PathBuf,
-    session_id: String,
-    title: Option<String>,
-    delegates: Vec<PathBuf>,
-) -> Option<DiscoveredFile> {
-    let meta = path.metadata().ok()?;
-    let mtime = mtime_secs(&meta);
-    let mut content_hash = format!("{}:{}", meta.len(), mtime);
-    // Delegated work can change without the parent growing, and the suffix
-    // only appears when there is any, so existing hashes stay valid.
-    let sidechains: Vec<std::fs::Metadata> =
-        delegates.iter().filter_map(|p| p.metadata().ok()).collect();
-    if !sidechains.is_empty() {
-        let len: u64 = sidechains.iter().map(|m| m.len()).sum();
-        let newest = sidechains.iter().map(mtime_secs).max().unwrap_or(0);
-        content_hash.push_str(&format!(":{}:{len}:{newest}", sidechains.len()));
-    }
-    Some(DiscoveredFile {
-        agent,
-        path,
-        session_id,
-        title,
-        delegates,
-        content_hash,
-        mtime,
-    })
-}
-
 fn records(content: &str) -> impl Iterator<Item = Value> + '_ {
     content
         .lines()
         .filter_map(|line| serde_json::from_str(line).ok())
 }
 
-fn each_record(file: &DiscoveredFile, mut visit: impl FnMut(&Value, bool)) -> Result<()> {
-    for record in records(&std::fs::read_to_string(&file.path)?) {
-        visit(&record, false);
+fn read_hashed(path: &Path, hash: &mut Sha256) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(path).with_context(|| format!("Cannot read {}", path.display()))?;
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(&bytes);
+    Ok(bytes)
+}
+
+fn file_hash(path: &Path, delegates: &[PathBuf]) -> Result<String> {
+    let mut hash = Sha256::new();
+    for path in std::iter::once(path).chain(delegates.iter().map(PathBuf::as_path)) {
+        read_hashed(path, &mut hash)?;
     }
-    for delegate in &file.delegates {
-        if let Ok(content) = std::fs::read_to_string(delegate) {
-            records(&content).for_each(|record| visit(&record, true));
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn each_record(file: &DiscoveredFile, mut visit: impl FnMut(&Value, bool)) -> Result<()> {
+    let mut hash = Sha256::new();
+    for (index, path) in std::iter::once(&file.path)
+        .chain(file.delegates.iter())
+        .enumerate()
+    {
+        let content = String::from_utf8(read_hashed(path, &mut hash)?)?;
+        for (line_no, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: Value = serde_json::from_str(line)
+                .with_context(|| format!("Malformed transcript at line {}", line_no + 1))?;
+            visit(&record, index > 0);
         }
     }
+    anyhow::ensure!(
+        format!("{:x}", hash.finalize()) == file.content_hash,
+        "Transcript changed during scan; retry the read"
+    );
     Ok(())
+}
+
+impl Discovery {
+    fn describe(
+        &mut self,
+        agent: Agent,
+        path: PathBuf,
+        session_id: String,
+        title: Option<String>,
+        delegates: Vec<PathBuf>,
+    ) -> Option<DiscoveredFile> {
+        let meta = match path.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                self.diagnostic(&path, &e.to_string());
+                return None;
+            }
+        };
+        let mtime = mtime_secs(&meta);
+        let content_hash = match file_hash(&path, &delegates) {
+            Ok(h) => h,
+            Err(e) => {
+                self.diagnostic(&path, &e.to_string());
+                return None;
+            }
+        };
+        Some(DiscoveredFile {
+            agent,
+            path,
+            session_id,
+            title,
+            delegates,
+            content_hash,
+            mtime,
+        })
+    }
+
+    fn diagnostic(&mut self, path: &Path, message: &str) {
+        self.diagnostics
+            .push(format!("{}: {message}", path.display()));
+    }
+
+    fn entries(&mut self, path: &Path) -> Vec<std::fs::DirEntry> {
+        match std::fs::read_dir(path) {
+            Ok(entries) => entries
+                .filter_map(|entry| match entry {
+                    Ok(entry) => Some(entry),
+                    Err(error) => {
+                        self.diagnostic(path, &error.to_string());
+                        None
+                    }
+                })
+                .collect(),
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    self.diagnostic(path, &error.to_string());
+                }
+                Vec::new()
+            }
+        }
+    }
 }
 
 fn clean_title(text: &str) -> Option<String> {
@@ -374,11 +446,14 @@ mod tests {
         std::fs::write(&parent, "{}").unwrap();
         std::fs::write(&child, "{}\n{}").unwrap();
 
-        let alone = describe(Agent::Codex, parent.clone(), "p".into(), None, vec![]).unwrap();
-        let with_child = describe(Agent::Codex, parent, "p".into(), None, vec![child]).unwrap();
+        let alone = Discovery::default()
+            .describe(Agent::Codex, parent.clone(), "p".into(), None, vec![])
+            .unwrap();
+        let with_child = Discovery::default()
+            .describe(Agent::Codex, parent, "p".into(), None, vec![child])
+            .unwrap();
 
-        assert_eq!(alone.content_hash.matches(':').count(), 1);
-        assert!(with_child.content_hash.starts_with(&alone.content_hash));
-        assert!(with_child.content_hash.contains(":1:5:"));
+        assert_eq!(alone.content_hash.len(), 64);
+        assert_ne!(alone.content_hash, with_child.content_hash);
     }
 }

@@ -1,6 +1,6 @@
+use z_report_core::pipeline;
 use z_report_lib::evaluator;
 use z_report_lib::models::SessionFacts;
-use z_report_lib::pipeline;
 use z_report_lib::store::Store;
 
 fn main() -> anyhow::Result<()> {
@@ -24,7 +24,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     let lifecycle = z_report_lib::lifecycle::Lifecycle::default();
-    let claude = lifecycle.begin_evaluation().unwrap();
+    let mut claude = lifecycle.begin_evaluation().unwrap();
+    claude.attach_lock(z_report_core::engine::lock(&store, "read")?);
     let result = evaluator::evaluate_day(&settings, &claude, &day, &sessions)?;
     eprintln!(
         "served by {} — ${:.2}, {} turns, {:.0}s",
