@@ -27,7 +27,7 @@ transcript adapters (Claude Code ~/.claude/projects, Codex ~/.codex/sessions) + 
         ↓
 normalized local evidence store (SQLite)
         ↓
-constrained evaluator (claude -p, Opus 5.5, high; falls back to codex exec, GPT-6 Sol, high)
+constrained evaluator (claude -p, Opus 5.5, high; falls back to codex exec, GPT-6.1 Sol, high)
         ↓
 review queue → approved journal → Markdown export
 ```
@@ -140,7 +140,7 @@ without one.
 The mod bundles its own copy of the engine and needs:
 
 - macOS on Apple Silicon
-- exactly the Claude Code version it was tested against (2.1.273 for 0.2.4) — the mod
+- exactly the Claude Code version it was tested against (2.1.273 for 0.2.5) — the mod
   checks this before touching the journal
 - `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment
 - if you already use the desktop app, Z Report 0.2.3 or later, opened once — only the
@@ -257,7 +257,7 @@ Verified against Claude Code 2.1.215:
 
 Verified against Codex CLI 0.152.1:
 
-- `codex exec --model gpt-6-sol -c model_reasoning_effort="high" --output-schema
+- `codex exec --model gpt-6.1-sol -c model_reasoning_effort="high" --output-schema
   <file> -o <file> --json` writes the schema-checked answer to the `-o` file and streams
   typed events (`thread.started`, `item.completed`, `turn.completed` with token usage)
   to stdout. No event names the serving model, so the requested model is recorded.

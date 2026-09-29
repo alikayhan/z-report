@@ -16,7 +16,7 @@ const MAX_BUDGET_USD: f64 = 5.0;
 pub fn model_for(agent: Agent) -> &'static str {
     match agent {
         Agent::Claude => "claude-opus-5-5",
-        Agent::Codex => "gpt-6-sol",
+        Agent::Codex => "gpt-6.1-sol",
     }
 }
 
@@ -748,7 +748,7 @@ mod tests {
 
         let done = decode_codex(events, "", &dir, Duration::from_millis(1500)).unwrap();
         assert_eq!(done.output, json!({"achievements": []}));
-        assert_eq!(done.model.as_deref(), Some("gpt-6-sol"));
+        assert_eq!(done.model.as_deref(), Some("gpt-6.1-sol"));
         assert_eq!(done.num_turns, Some(2));
         assert_eq!(done.duration_ms, Some(1500));
         assert_eq!(done.cost_usd, None);
