@@ -15,14 +15,14 @@ const MAX_BUDGET_USD: f64 = 5.0;
 
 pub fn model_for(agent: Agent) -> &'static str {
     match agent {
-        Agent::Claude => "claude-opus-5",
-        Agent::Codex => "gpt-5.6-sol",
+        Agent::Claude => "claude-opus-5-5",
+        Agent::Codex => "gpt-6-sol",
     }
 }
 
 pub fn effort_for(agent: Agent) -> &'static str {
     match agent {
-        Agent::Claude => "xhigh",
+        Agent::Claude => "high",
         Agent::Codex => "high",
     }
 }
@@ -725,9 +725,9 @@ mod tests {
         let msg = classify_failure(
             Agent::Codex,
             "",
-            "Reading additional input from stdin...\nError: model gpt-5.6-sol is unavailable",
+            "Reading additional input from stdin...\nError: model gpt-6-sol is unavailable",
         );
-        assert_eq!(msg, "Error: model gpt-5.6-sol is unavailable");
+        assert_eq!(msg, "Error: model gpt-6-sol is unavailable");
     }
 
     #[test]
@@ -748,7 +748,7 @@ mod tests {
 
         let done = decode_codex(events, "", &dir, Duration::from_millis(1500)).unwrap();
         assert_eq!(done.output, json!({"achievements": []}));
-        assert_eq!(done.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(done.model.as_deref(), Some("gpt-6-sol"));
         assert_eq!(done.num_turns, Some(2));
         assert_eq!(done.duration_ms, Some(1500));
         assert_eq!(done.cost_usd, None);
