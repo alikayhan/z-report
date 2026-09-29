@@ -1,3 +1,6 @@
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 // One lock for updates and every evaluator CLI child process (evaluations and merge
@@ -10,11 +13,14 @@ struct Busy {
     evaluating: bool,
     evaluator_procs: u32,
     updating: bool,
+    cancel: Arc<AtomicBool>,
 }
 
 pub struct EvaluatorGuard {
     shared: Arc<Mutex<Busy>>,
     evaluation: bool,
+    lock: Option<File>,
+    cancel: Arc<AtomicBool>,
 }
 
 pub struct UpdateGuard(Arc<Mutex<Busy>>);
@@ -26,10 +32,13 @@ impl Lifecycle {
             return None;
         }
         busy.evaluating = true;
+        busy.cancel = Arc::new(AtomicBool::new(false));
         busy.evaluator_procs += 1;
         Some(EvaluatorGuard {
             shared: self.0.clone(),
             evaluation: true,
+            lock: None,
+            cancel: busy.cancel.clone(),
         })
     }
 
@@ -50,6 +59,8 @@ impl Lifecycle {
         Some(EvaluatorGuard {
             shared: self.0.clone(),
             evaluation: false,
+            lock: None,
+            cancel: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -69,6 +80,25 @@ impl Lifecycle {
 
     pub fn evaluating(&self) -> bool {
         self.0.lock().unwrap().evaluating
+    }
+
+    pub fn cancel(&self) {
+        self.0.lock().unwrap().cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+impl EvaluatorGuard {
+    pub fn attach_lock(&mut self, lock: File) {
+        self.lock = Some(lock);
+    }
+    pub fn lock_fd(&self) -> Option<i32> {
+        self.lock.as_ref().map(AsRawFd::as_raw_fd)
+    }
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+    pub fn cancel_token(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
     }
 }
 

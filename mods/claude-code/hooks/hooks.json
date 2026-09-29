@@ -1,0 +1,6 @@
+{
+  "description": "Z Report journal",
+  "modules": [
+    "./register.tsx"
+  ]
+}

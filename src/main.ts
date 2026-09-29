@@ -14,7 +14,6 @@ const state = {
   journalQuery: "",
   selId: null as string | null,
   draftOutcomes: null as Candidate["outcomes"] | null,
-  editedIds: new Set<string>(),
   selection: new Set<string>(),
   drawerOpen: false,
   impactForId: null as string | null,
@@ -145,6 +144,7 @@ function renderSidebar() {
   $("#side-status").innerHTML = rows.join("");
   $("#side-version").innerHTML = renderVersionRow(o);
   $("#evaluating").hidden = !o?.evaluating;
+  $("#btn-xread").textContent = o?.evaluating ? "Cancel X-read" : "Review now (X-read)";
 }
 
 const icon = (d: string) => `<svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
@@ -625,7 +625,7 @@ function renderSettings() {
         <label for="set-retention">Keep unreviewed candidates for</label>
         <input type="number" id="set-retention" min="0" max="3650" value="${s.retention_days}">
       </div>
-      <p class="setting-hint">Days. 0 keeps them forever. Approved journal entries are always kept. Session evidence is never deleted — anything outside the 15-day evaluation window is simply ignored.</p>
+      <p class="setting-hint">Days. 0 keeps them forever. Approved journal entries are always kept. Stored session evidence is kept for 97 days; reads cover the latest 15 days. Original transcripts are never deleted.</p>
       <label class="setting-hint" for="set-repos" style="display:block">Excluded repositories (one path per line)</label>
       <textarea class="repos" id="set-repos">${esc(s.excluded_repos.join("\n"))}</textarea>
     </div>
@@ -641,6 +641,10 @@ function renderSettings() {
         )
         .join("")}
       <p class="setting-hint">Claude Code evaluates whenever it is installed and the run succeeds. If it is missing or a run fails, the same evidence goes to Codex instead, and the run records which model answered.</p>
+      <div class="setting-row">
+        <label for="set-auto-catchup">Catch up in Claude Code after 24 hours</label>
+        <input type="checkbox" id="set-auto-catchup" ${s.auto_catchup ? "checked" : ""}>
+      </div>
       <div class="setting-row">
         <label for="set-cost-limit">${metered ? "Stop a Claude Code run past a $5 cost limit" : "Stop a Claude Code run past a high usage limit"}</label>
         <input type="checkbox" id="set-cost-limit" ${s.cost_limit_enabled ? "checked" : ""}>
@@ -688,6 +692,7 @@ function renderSettings() {
   bind("set-repos", (v) =>
     (state.settings!.excluded_repos = v.split("\n").map((l) => l.trim()).filter(Boolean))
   );
+  bind("set-auto-catchup", (v) => (state.settings!.auto_catchup = v === "true"));
   bind("set-cost-limit", (v) => (state.settings!.cost_limit_enabled = v === "true"));
 }
 
@@ -736,18 +741,15 @@ const approveSelected = () =>
   resolveSelected(
     "APPROVED",
     false,
-    async (id) => {
-      await api.approve(id, state.editedIds.has(id));
-      state.editedIds.delete(id);
-    },
+    (id) => api.approve(id, false, state.pending.find(c => c.id === id)!.revision),
     "Approved — filed to your journal",
   );
 
 const discardSelected = () =>
-  resolveSelected("DISCARDED", true, (id) => api.discard(id), "Discarded — restore it from the drawer below the queue");
+  resolveSelected("DISCARDED", true, (id) => api.discard(id, state.pending.find(c => c.id === id)!.revision), "Discarded — restore it from the drawer below the queue");
 
 async function mergeCards(ids: string[]) {
-  const newId = await api.merge(ids);
+  const newId = await api.merge(ids, ids.map(id => state.pending.find(c => c.id === id)!.revision));
   state.selection.clear();
   stopEditing();
   await refreshAll();
@@ -777,8 +779,7 @@ async function handleAct(act: string, target: HTMLElement) {
       const title = ($("#edit-title") as HTMLInputElement).value.trim();
       const contribution = ($("#edit-body") as HTMLTextAreaElement).value.trim();
       if (title) {
-        await api.updateCandidate(c.id, title, contribution, state.draftOutcomes ?? c.outcomes);
-        state.editedIds.add(c.id);
+        await api.updateCandidate(c.id, title, contribution, state.draftOutcomes ?? c.outcomes, c.revision);
       }
       stopEditing();
       await refreshAll();
@@ -932,7 +933,7 @@ function bindReviewEvents() {
     const restore = target.closest<HTMLElement>("[data-restore]");
     if (restore) {
       const id = restore.dataset.restore!;
-      await api.restore(id);
+      await api.restore(id, state.discarded.find(c => c.id === id)!.revision);
       stopEditing();
       await refreshAll();
       state.selId = id;
@@ -965,8 +966,11 @@ function bindReviewEvents() {
   $("#btn-xread").addEventListener("click", async () => {
     state.lastError = "";
     try {
-      await api.runXread();
-      if (state.overview) state.overview.evaluating = true;
+      if (state.overview?.evaluating) await api.cancelXread();
+      else {
+        await api.runXread();
+        if (state.overview) state.overview.evaluating = true;
+      }
       renderSidebar();
     } catch (e) {
       state.lastError = String(e);

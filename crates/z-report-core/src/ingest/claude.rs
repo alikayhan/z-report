@@ -1,7 +1,7 @@
 use super::{
-    clean_title, command_fact, describe, each_record, external_action, home, is_transcript,
-    named_branch, push_prompt, record_file_change, set_final_response, update_timestamps,
-    DiscoveredFile,
+    clean_title, command_fact, each_record, external_action, home, is_transcript, named_branch,
+    push_prompt, record_file_change, set_final_response, update_timestamps, DiscoveredFile,
+    Discovery,
 };
 use crate::models::*;
 use anyhow::Result;
@@ -9,12 +9,10 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(transcript.with_extension("").join("subagents")) else {
-        return Vec::new();
-    };
+fn sidechain_files(discovery: &mut Discovery, transcript: &Path) -> Vec<PathBuf> {
+    let entries = discovery.entries(&transcript.with_extension("").join("subagents"));
     let mut out: Vec<PathBuf> = entries
-        .flatten()
+        .into_iter()
         .map(|e| e.path())
         .filter(|p| is_transcript(p))
         .collect();
@@ -22,16 +20,13 @@ fn sidechain_files(transcript: &Path) -> Vec<PathBuf> {
     out
 }
 
-pub(super) fn discover() -> Vec<DiscoveredFile> {
+pub(super) fn discover(discovery: &mut Discovery) -> Vec<DiscoveredFile> {
     let mut out = Vec::new();
-    let Ok(projects) = std::fs::read_dir(home().join(".claude").join("projects")) else {
-        return out;
-    };
-    for project in projects.flatten() {
-        let Ok(files) = std::fs::read_dir(project.path()) else {
+    for project in discovery.entries(&home().join(".claude").join("projects")) {
+        if !project.path().is_dir() {
             continue;
-        };
-        for file in files.flatten() {
+        }
+        for file in discovery.entries(&project.path()) {
             let path = file.path();
             if !is_transcript(&path) {
                 continue;
@@ -40,8 +35,8 @@ pub(super) fn discover() -> Vec<DiscoveredFile> {
             else {
                 continue;
             };
-            let delegates = sidechain_files(&path);
-            out.extend(describe(Agent::Claude, path, session_id, None, delegates));
+            let delegates = sidechain_files(discovery, &path);
+            out.extend(discovery.describe(Agent::Claude, path, session_id, None, delegates));
         }
     }
     out
@@ -257,14 +252,17 @@ mod tests {
         session_id: &str,
         retain_prompts: bool,
     ) -> Result<SessionFacts> {
-        let file = describe(
-            Agent::Claude,
-            path.to_path_buf(),
-            session_id.to_owned(),
-            None,
-            sidechain_files(path),
-        )
-        .expect("fixture exists");
+        let mut discovery = Discovery::default();
+        let delegates = sidechain_files(&mut discovery, path);
+        let file = discovery
+            .describe(
+                Agent::Claude,
+                path.to_path_buf(),
+                session_id.to_owned(),
+                None,
+                delegates,
+            )
+            .expect("fixture exists");
         crate::ingest::parse_transcript(&file, retain_prompts)
     }
 

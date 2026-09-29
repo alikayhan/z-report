@@ -1,0 +1,8 @@
+{
+  "name": "z-report",
+  "version": "0.2.3",
+  "author": {
+    "name": "Z Report"
+  },
+  "description": "Review and export an evidence-backed journal of your local Claude Code and Codex work."
+}

@@ -35,21 +35,26 @@ pub struct ExportData {
 
 #[tauri::command]
 pub fn overview(app: AppHandle, state: State<AppState>) -> CmdResult<Overview> {
-    let (pending, session_count, settings, last_scan_at) = {
+    let (pending, session_count, settings, last_scan_at, shared_read) = {
         let store = state.store.lock().unwrap();
+        store.recover_reads().map_err(err)?;
         let (pending, session_count) = store.overview_counts().map_err(err)?;
         (
             pending,
             session_count,
             store.settings(),
             store.kv_get("last_scan_at"),
+            store
+                .read_cycle(None)
+                .map_err(err)?
+                .is_some_and(|r| matches!(r.status.as_str(), "queued" | "running")),
         )
     };
     let availability = state.availability.lock().unwrap().clone();
     Ok(Overview {
         pending,
         session_count,
-        evaluating: state.lifecycle.evaluating(),
+        evaluating: state.lifecycle.evaluating() || shared_read,
         last_scan_at,
         zread_time: settings.zread_time,
         today: pipeline::today(),
@@ -83,10 +88,11 @@ pub fn update_candidate(
     title: String,
     contribution: String,
     outcomes: Vec<Outcome>,
+    revision: Option<i64>,
 ) -> CmdResult<()> {
     let store = state.store.lock().unwrap();
     store
-        .update_candidate_fields(&id, &title, &contribution, &outcomes)
+        .edit_candidate(&id, revision, &title, &contribution, &outcomes)
         .map_err(err)?;
     relink(&store);
     Ok(())
@@ -97,33 +103,46 @@ fn relink(store: &store::Store) {
 }
 
 #[tauri::command]
-pub fn approve_candidate(state: State<AppState>, id: String, edited: bool) -> CmdResult<()> {
+pub fn approve_candidate(
+    state: State<AppState>,
+    id: String,
+    edited: bool,
+    revision: Option<i64>,
+) -> CmdResult<()> {
     let store = state.store.lock().unwrap();
-    let c = store.candidate(&id).map_err(err)?;
-    let entry = JournalEntry::from_candidate(&c, chrono::Local::now().to_rfc3339(), edited);
-    store.insert_journal(&entry).map_err(err)?;
-    store
-        .set_candidate_status(&id, "approved", None)
-        .map_err(err)?;
+    store.approve(&id, revision, edited).map_err(err)?;
     relink(&store);
     Ok(())
 }
 
-fn transition_candidate(state: &AppState, id: &str, status: &str) -> CmdResult<()> {
+fn transition_candidate(
+    state: &AppState,
+    id: &str,
+    status: &str,
+    revision: Option<i64>,
+) -> CmdResult<()> {
     let store = state.store.lock().unwrap();
-    store.set_candidate_status(id, status, None).map_err(err)?;
+    store.transition(id, revision, status).map_err(err)?;
     relink(&store);
     Ok(())
 }
 
 #[tauri::command]
-pub fn discard_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
-    transition_candidate(&state, &id, "discarded")
+pub fn discard_candidate(
+    state: State<AppState>,
+    id: String,
+    revision: Option<i64>,
+) -> CmdResult<()> {
+    transition_candidate(&state, &id, "discarded", revision)
 }
 
 #[tauri::command]
-pub fn restore_candidate(state: State<AppState>, id: String) -> CmdResult<()> {
-    transition_candidate(&state, &id, "pending")
+pub fn restore_candidate(
+    state: State<AppState>,
+    id: String,
+    revision: Option<i64>,
+) -> CmdResult<()> {
+    transition_candidate(&state, &id, "pending", revision)
 }
 
 #[tauri::command]
@@ -131,6 +150,7 @@ pub fn merge_candidates(
     app: AppHandle,
     state: State<AppState>,
     ids: Vec<String>,
+    revisions: Option<Vec<i64>>,
 ) -> CmdResult<String> {
     if ids.len() < 2 {
         return Err("select at least two candidates to merge".into());
@@ -145,13 +165,7 @@ pub fn merge_candidates(
         if merged.iter().any(|c| c.status != "pending") {
             return Err("only cards still in the review queue can be merged".into());
         }
-        let new = pipeline::merge_into_one(&merged);
-        store.insert_candidate(&new).map_err(err)?;
-        for id in &ids {
-            store
-                .set_candidate_status(id, "merged", Some(&new.id))
-                .map_err(err)?;
-        }
+        let new = store.merge(&ids, revisions.as_deref()).map_err(err)?;
         let parts: Vec<(String, String)> = merged
             .iter()
             .map(|c| (c.title.clone(), c.contribution.clone()))
@@ -279,10 +293,22 @@ pub fn restart_app(app: AppHandle) {
 
 #[tauri::command]
 pub fn delete_all_data(state: State<AppState>) -> CmdResult<()> {
-    state.store.lock().unwrap().wipe_all().map_err(err)?;
+    let store = state.store.lock().unwrap();
+    let _lock = z_report_core::engine::lock(&store, "read").map_err(err)?;
+    store.wipe_all().map_err(err)?;
     let eval_dir = store::data_dir().join("eval");
     if eval_dir.exists() {
         std::fs::remove_dir_all(&eval_dir).map_err(err)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_xread(state: State<AppState>) -> CmdResult<()> {
+    state.lifecycle.cancel();
+    let store = state.store.lock().unwrap();
+    if let Some(read) = store.read_cycle(None).map_err(err)? {
+        store.cancel_read(&read.id).map_err(err)?;
     }
     Ok(())
 }

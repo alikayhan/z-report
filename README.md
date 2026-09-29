@@ -12,14 +12,16 @@ keeps a menu-bar icon; closing the window leaves it collecting evidence and runn
 the evening Z-read in the background. Like the end-of-day Z-report a cash register
 prints, it totals what was actually recorded and closes the books on the day: each
 evening it reconstructs accomplishments from local session transcripts and Git facts,
-then asks you to approve, edit, merge, or discard them.
+then asks you to approve, edit, merge, or discard them. The same journal can also be
+reviewed without leaving Claude Code, through the optional [Claude Code mod](#claude-code-mod).
 
 ## How it works
 
 ```
-macOS desktop window + menu-bar tray (Tauri)
-        ↓
-background worker + scheduler (Rust)
+macOS desktop window + menu-bar tray (Tauri)   |   Claude Code mod (/z-report)
+        ↓                                      |           ↓
+background worker + scheduler (Rust)           |   z-report engine CLI
+        └──────────── shared engine (Rust) ────────────────┘
         ↓
 transcript adapters (Claude Code ~/.claude/projects, Codex ~/.codex/sessions) + Git evidence adapter
         ↓
@@ -125,6 +127,33 @@ Work already approved into the journal is flagged rather than hidden: if a sessi
 have already written up comes back through evaluation, the new card says so and links to
 the entry, instead of quietly appearing as a second copy of something you have read.
 
+## Claude Code mod
+
+`/z-report` opens the review queue in a Claude Code pane: approve, edit, merge, discard,
+search the journal, and export, against the same local store the desktop app uses.
+`/z-report x-read` starts a read and `/z-report cancel` stops it. A read in either client
+shows as running in the other, and edits carry a revision so a card changed in one place
+cannot be silently overwritten from the other. With "Catch up in Claude Code after 24
+hours" on (Settings), an interactive session runs a read by itself once a day has passed
+without one.
+
+The mod bundles its own copy of the engine and needs:
+
+- macOS on Apple Silicon
+- exactly the Claude Code version it was tested against (2.1.273 for 0.2.3) — the mod
+  checks this before touching the journal
+- `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment
+- if you already use the desktop app, Z Report 0.2.3 or later, opened once — only the
+  desktop app upgrades an existing journal, so an older app is never locked out of it
+
+To install from a checkout:
+
+```sh
+npm run mod:package
+claude plugin marketplace add ./dist/claude-code-mod/marketplace
+claude plugin install z-report@z-report
+```
+
 ## Privacy and network boundary
 
 - All product data (evidence, candidates, journal, settings) lives in
@@ -161,8 +190,11 @@ authenticated (Claude Code is preferred; Codex is the fallback).
 ```sh
 npm install
 npm run tauri dev      # run the app
-cargo test             # backend tests (from src-tauri/)
-npm run tauri build    # release bundle (.app + .dmg)
+cargo test --workspace # backend tests
+npm run tauri build    # release bundle (.app + .dmg), under target/
+npm run mod:test       # engine tests plus the CLI integration suite
+npm run mod:check      # mod type check and hook tests
+npm run mod:package    # signed plugin and local marketplace, under dist/claude-code-mod/
 ```
 
 The UI can be developed without Tauri: `npm run dev` serves it in a browser against
@@ -170,10 +202,11 @@ fixture data (`src/mock.ts`).
 
 ## Releasing
 
-The version lives only in `src-tauri/Cargo.toml` — `package.json` and `tauri.conf.json`
-deliberately carry none, so nothing can drift — and the release workflow fails unless
-the pushed tag matches it. Bump the version, run `cargo check` so `Cargo.lock` follows,
-then tag:
+The version lives in `src-tauri/Cargo.toml`, `crates/z-report-core/Cargo.toml`,
+`crates/z-report-cli/Cargo.toml`, and `mods/claude-code/.claude-plugin/plugin.json`;
+packaging fails unless all four match, and the release workflow fails unless the pushed
+tag matches `src-tauri/Cargo.toml`. `package.json` and `tauri.conf.json` deliberately
+carry none. Bump the version, run `cargo check` so `Cargo.lock` follows, then tag:
 
 ```sh
 git tag -a v0.2.0 -m "What changed, published as the release notes"
@@ -182,7 +215,8 @@ git push origin v0.2.0
 
 The tag triggers `.github/workflows/release.yml`, which tests, builds
 `aarch64-apple-darwin`, signs, notarizes, and staples the app and DMG, and publishes the
-DMG, updater archive (`.app.tar.gz` + `.sig`), `latest.json`, and `checksums.txt` to the
+DMG, updater archive (`.app.tar.gz` + `.sig`), the notarized Claude Code mod archive,
+`latest.json`, and `checksums.txt` to the
 public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository.
 Installed apps discover the release through `latest.json`; Homebrew users get it once
 `Casks/z-report.rb` in [homebrew-tap](https://github.com/alikayhan/homebrew-tap) is

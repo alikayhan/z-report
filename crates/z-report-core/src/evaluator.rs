@@ -4,11 +4,9 @@ use crate::store;
 use anyhow::{anyhow, bail, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const EVAL_TIMEOUT: Duration = Duration::from_secs(900);
 /// Hard per-run safety stop for a runaway evaluation, not a money budget: on a
@@ -146,21 +144,30 @@ fn cli_command(agent: Agent, settings: &Settings) -> Result<Command> {
         Agent::Claude => "ANTHROPIC_API_KEY",
         Agent::Codex => "OPENAI_API_KEY",
     });
+    cmd.env("Z_REPORT_EVALUATOR", "1");
+    cmd.env_remove("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS");
     cmd.stdin(Stdio::null());
     Ok(cmd)
 }
 
-pub fn probe(settings: &Settings, _busy: &EvaluatorGuard) -> Availability {
-    let mut availability = Availability::default();
-    for info in &mut availability.evaluators {
+pub fn discover(settings: &Settings) -> Vec<EvaluatorInfo> {
+    let mut evaluators = Availability::default().evaluators;
+    for info in &mut evaluators {
         info.found = find_cli(info.agent, settings).is_ok();
     }
-    availability.metered = availability
-        .evaluators
+    evaluators
+}
+
+pub fn probe(settings: &Settings, _busy: &EvaluatorGuard) -> Availability {
+    let evaluators = discover(settings);
+    let metered = evaluators
         .iter()
         .find(|info| info.found)
         .is_some_and(|info| metered_login(info.agent, settings));
-    availability
+    Availability {
+        evaluators,
+        metered,
+    }
 }
 
 // Only confirmed API-key auth is metered; subscription cost values are estimates.
@@ -223,11 +230,11 @@ fn structured_command(agent: Agent, settings: &Settings, job: &Job, dir: &Path) 
             let (tools, disallowed) = match job.kind {
                 JobKind::Evaluation => (
                     "Read,Grep,Glob",
-                    "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task",
+                    "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent",
                 ),
                 JobKind::Rewrite => (
                     "",
-                    "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task",
+                    "Bash,Edit,Write,Read,Grep,Glob,NotebookEdit,WebFetch,WebSearch,Task,Agent",
                 ),
             };
             cmd.args([
@@ -243,6 +250,10 @@ fn structured_command(agent: Agent, settings: &Settings, job: &Job, dir: &Path) 
                 tools,
                 "--disallowedTools",
                 disallowed,
+                "--safe-mode",
+                "--strict-mcp-config",
+                "--mcp-config",
+                "{\"mcpServers\":{}}",
                 "--no-session-persistence",
                 "--setting-sources",
                 "",
@@ -286,59 +297,28 @@ fn structured_command(agent: Agent, settings: &Settings, job: &Job, dir: &Path) 
 }
 
 fn run_dir(name: &str) -> Result<PathBuf> {
-    let dir = store::data_dir().join("eval").join(format!(
-        "{}-{}",
-        name,
-        chrono::Local::now().format("%H%M%S%3f")
-    ));
+    let dir = store::data_dir()
+        .join("eval")
+        .join(format!("{}-{}", name, crate::engine::new_id()));
     std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
     Ok(dir)
 }
 
-fn run(agent: Agent, settings: &Settings, job: &Job, dir: &Path) -> Result<Completed> {
+fn run(
+    agent: Agent,
+    settings: &Settings,
+    job: &Job,
+    dir: &Path,
+    busy: &EvaluatorGuard,
+) -> Result<Completed> {
     let cmd = structured_command(agent, settings, job, dir)?;
-    let (out, elapsed) = wait_with_timeout(cmd, dir)?;
+    let (out, elapsed) = crate::process::run(cmd, dir, EVAL_TIMEOUT, busy)?;
     decode(agent, &out, dir, elapsed)
-}
-
-fn wait_with_timeout(mut cmd: Command, dir: &Path) -> Result<(Output, Duration)> {
-    let mut child = cmd
-        .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow!("failed to launch: {e}"))?;
-    // Drain both pipes while waiting, or a chatty child blocks on a full pipe and never exits.
-    let stdout = drain(child.stdout.take());
-    let stderr = drain(child.stderr.take());
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if started.elapsed() > EVAL_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("timed out after {}s", EVAL_TIMEOUT.as_secs());
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    };
-    let out = Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    };
-    Ok((out, started.elapsed()))
-}
-
-fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buf);
-        }
-        buf
-    })
 }
 
 fn decode(agent: Agent, out: &Output, dir: &Path, elapsed: Duration) -> Result<Completed> {
@@ -541,7 +521,7 @@ Return only the structured output."#;
 
 pub fn evaluate_day(
     settings: &Settings,
-    _busy: &EvaluatorGuard,
+    busy: &EvaluatorGuard,
     day: &str,
     sessions: &[SessionFacts],
 ) -> Result<EvalResult> {
@@ -557,7 +537,8 @@ pub fn evaluate_day(
         schema: output_schema(),
     };
     let result = with_fallback(settings, |agent| {
-        let done = run(agent, settings, &job, &dir)?;
+        anyhow::ensure!(!busy.cancelled(), "Read cancelled");
+        let done = run(agent, settings, &job, &dir, busy)?;
         let parsed: EvaluatorOutput = serde_json::from_value(done.output)
             .map_err(|e| anyhow!("output did not match contract: {e}"))?;
         Ok(EvalResult {
@@ -583,7 +564,7 @@ Use only what the cards state. Do not invent outcomes, do not add detail that is
 
 pub fn rewrite_merged(
     settings: &Settings,
-    _busy: &EvaluatorGuard,
+    busy: &EvaluatorGuard,
     parts: &[(String, String)],
 ) -> Result<(String, String)> {
     let cards: Vec<Value> = parts
@@ -609,7 +590,8 @@ pub fn rewrite_merged(
     };
     let dir = run_dir("merge")?;
     let result = with_fallback(settings, |agent| {
-        let s = run(agent, settings, &job, &dir)?.output;
+        anyhow::ensure!(!busy.cancelled(), "Read cancelled");
+        let s = run(agent, settings, &job, &dir, busy)?.output;
         let (Some(title), Some(contribution)) = (s["title"].as_str(), s["contribution"].as_str())
         else {
             bail!("merge rewrite output did not match contract");

@@ -214,6 +214,8 @@ pub struct RelatedLink {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Candidate {
+    #[serde(default)]
+    pub revision: i64,
     pub id: String,
     pub day: String,
     #[serde(default)]
@@ -316,6 +318,20 @@ pub struct Settings {
     pub claude_path: Option<String>,
     pub retention_days: u32,
     pub cost_limit_enabled: bool,
+    pub auto_catchup: bool,
+}
+
+impl Settings {
+    pub fn excludes(&self, facts: &SessionFacts) -> bool {
+        [facts.repo_root.as_deref(), facts.cwd.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|path| {
+                self.excluded_repos
+                    .iter()
+                    .any(|excluded| std::path::Path::new(path).starts_with(excluded))
+            })
+    }
 }
 
 impl Default for Settings {
@@ -328,6 +344,7 @@ impl Default for Settings {
             claude_path: None,
             retention_days: 90,
             cost_limit_enabled: true,
+            auto_catchup: true,
         }
     }
 }

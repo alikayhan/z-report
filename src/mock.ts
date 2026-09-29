@@ -39,6 +39,7 @@ const candidates: Candidate[] = [
     ],
     repo: "/Users/dev/gymondo-ios-app",
     model: "claude-opus-5",
+    revision: 0,
     status: "pending",
     created_at: new Date().toISOString(),
   },
@@ -61,6 +62,7 @@ const candidates: Candidate[] = [
     pr_links: [],
     repo: "/Users/dev/gymondo-ios-app",
     model: "claude-opus-5",
+    revision: 0,
     status: "pending",
     created_at: new Date().toISOString(),
   },
@@ -71,6 +73,7 @@ const discarded: Candidate[] = [
     ...candidates[1],
     id: "c9",
     title: "Renamed two variables in a scratch file",
+    revision: 0,
     status: "discarded",
   },
 ];
@@ -113,6 +116,7 @@ const settings: Settings = {
   claude_path: null,
   retention_days: 90,
   cost_limit_enabled: true,
+  auto_catchup: true,
 };
 
 const runs: EvalRun[] = [
