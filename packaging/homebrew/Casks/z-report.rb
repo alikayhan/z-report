@@ -1,6 +1,6 @@
 cask "z-report" do
-  version "0.2.2"
-  sha256 "1daa32f5067bdbaaf4517a1f87351628a45b80482c3f5cc2fb0150d5e545e0fc"
+  version "0.2.3"
+  sha256 "c683fd4ae79d65843196b59b76f11cf3fc67f88f53da11d7f9986c74891ed2e3"
 
   url "https://github.com/alikayhan/z-report-releases/releases/download/v#{version}/Z-Report_#{version}_aarch64.dmg"
   name "Z Report"
