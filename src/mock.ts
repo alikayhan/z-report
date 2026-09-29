@@ -152,7 +152,7 @@ export function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise
         today,
         evaluators: [
           { agent: "claude", model: "claude-opus-5-5", effort: "high", found: true },
-          { agent: "codex", model: "gpt-6-sol", effort: "high", found: true },
+          { agent: "codex", model: "gpt-6.1-sol", effort: "high", found: true },
         ],
         metered: false,
         app_version: "0.2.0",
