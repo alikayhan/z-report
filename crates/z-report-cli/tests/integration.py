@@ -161,6 +161,13 @@ class EngineTests(unittest.TestCase):
         path=self.fixture();lines=[json.loads(line) for line in path.read_text().splitlines()];lines[0]['cwd']='/private/excluded/project';path.write_text('\n'.join(map(json.dumps,lines)))
         self.rpc('update_settings',patch={'excluded_repos':['/private/excluded']})
         self.assertEqual(self.wait(self.start())['status'],'completed');self.assertEqual(self.calls(),[])
+    def test_existing_older_journal_is_left_for_the_desktop_app(self):
+        data=self.root/'legacy';data.mkdir()
+        with sqlite3.connect(data/'zreport.db') as db:db.execute('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        p=subprocess.run([str(ENGINE),'--data-dir',str(data),'rpc'],input=json.dumps({'protocol':1,'action':'overview'}),capture_output=True,text=True,env=self.env,timeout=10)
+        self.assertEqual((p.returncode,json.loads(p.stdout)['error']['code']),(5,'incompatible'))
+        with sqlite3.connect(data/'zreport.db') as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone(),(0,));db.execute("INSERT INTO kv VALUES('k','v')")
     def test_headless_automatic_request_never_initializes(self):
         self.fixture();self.assertIsNone(self.rpc('read_start',owner='test',automatic=True,interactive=False)['data']);self.assertEqual(self.calls(),[])
 

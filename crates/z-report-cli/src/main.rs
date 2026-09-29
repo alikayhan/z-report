@@ -94,7 +94,7 @@ fn run() -> Result<Value> {
     } else {
         None
     };
-    let store = Store::open_default()?;
+    let store = Store::open_without_upgrade(Store::default_path()?)?;
     let engine = Engine::new(store);
     match command {
         "rpc" => rpc::dispatch(&engine, request.unwrap()),

@@ -39,13 +39,27 @@ fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &st
 }
 
 impl Store {
-    pub fn open_default() -> Result<Self> {
+    pub fn default_path() -> Result<PathBuf> {
         let dir = data_dir();
         std::fs::create_dir_all(&dir)?;
-        Self::open(dir.join("zreport.db"))
+        Ok(dir.join("zreport.db"))
+    }
+
+    pub fn open_default() -> Result<Self> {
+        Self::open(Self::default_path()?)
     }
 
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::open_with(path, true)
+    }
+
+    // The upgrade locks out older desktop apps, so only the desktop app may
+    // upgrade an existing journal; other clients may still create a fresh one.
+    pub fn open_without_upgrade<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::open_with(path, false)
+    }
+
+    fn open_with<P: AsRef<Path>>(path: P, upgrade: bool) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let conn = Connection::open(&path)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -54,6 +68,17 @@ impl Store {
             version <= i64::from(DATABASE_VERSION),
             "Database requires a newer Z Report engine (schema {version})"
         );
+        if !upgrade && version < i64::from(DATABASE_VERSION) {
+            let empty: bool =
+                conn.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master)", [], |r| {
+                    r.get(0)
+                })?;
+            anyhow::ensure!(
+                empty,
+                "Your journal uses an older schema. Update the Z Report app to {} or later and open it once, then try again.",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
         conn.create_scalar_function(
             "zreport_writer_version",
             0,
@@ -1154,6 +1179,33 @@ mod tests {
         assert_eq!(tables, 0);
         drop(raw);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn only_upgrading_opens_migrate_an_existing_journal() {
+        let path = std::env::temp_dir().join(format!("zreport-{}.db", crate::engine::new_id()));
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .unwrap();
+        drop(raw);
+        let err = Store::open_without_upgrade(&path).err().unwrap();
+        assert!(err.to_string().contains("older schema"));
+        let raw = Connection::open(&path).unwrap();
+        let version: i64 = raw
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 0);
+        raw.execute("INSERT INTO kv VALUES('k','v')", []).unwrap();
+        drop(raw);
+        drop(Store::open(&path).unwrap());
+        assert!(Store::open_without_upgrade(&path).is_ok());
+        std::fs::remove_file(path).unwrap();
+
+        let fresh = std::env::temp_dir().join(format!("zreport-{}.db", crate::engine::new_id()));
+        let store = Store::open_without_upgrade(&fresh).unwrap();
+        store.kv_set("k", "v").unwrap();
+        drop(store);
+        std::fs::remove_file(fresh).unwrap();
     }
 
     #[test]
