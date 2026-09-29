@@ -27,7 +27,7 @@ transcript adapters (Claude Code ~/.claude/projects, Codex ~/.codex/sessions) + 
         ↓
 normalized local evidence store (SQLite)
         ↓
-constrained evaluator (claude -p, Opus 5, xhigh; falls back to codex exec, GPT-5.6 Sol, high)
+constrained evaluator (claude -p, Opus 5.5, high; falls back to codex exec, GPT-6 Sol, high)
         ↓
 review queue → approved journal → Markdown export
 ```
@@ -245,7 +245,7 @@ any other key, so losing it strands every installed copy on its current version.
 
 Verified against Claude Code 2.1.215:
 
-- `claude -p --model claude-opus-5 --effort xhigh --output-format json` returns a
+- `claude -p --model claude-opus-5-5 --effort high --output-format json` returns a
   single JSON result whose `modelUsage` records the model that actually served the
   run — stored with every evaluation.
 - `--json-schema` yields a validated `structured_output` object matching the
@@ -257,7 +257,7 @@ Verified against Claude Code 2.1.215:
 
 Verified against Codex CLI 0.152.1:
 
-- `codex exec --model gpt-5.6-sol -c model_reasoning_effort="high" --output-schema
+- `codex exec --model gpt-6-sol -c model_reasoning_effort="high" --output-schema
   <file> -o <file> --json` writes the schema-checked answer to the `-o` file and streams
   typed events (`thread.started`, `item.completed`, `turn.completed` with token usage)
   to stdout. No event names the serving model, so the requested model is recorded.
