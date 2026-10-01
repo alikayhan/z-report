@@ -23,6 +23,20 @@ export function agentsLabel(agents: Agent[]): string {
   return agents.map((agent) => AGENT_LABELS[agent]).join(" + ");
 }
 
+export interface SessionFacts {
+  session_id: string;
+  agent: Agent;
+  title: string | null;
+  cli_version: string | null;
+  first_ts: string | null;
+  last_ts: string | null;
+  git_branch: string | null;
+  commands: unknown[];
+  commits: unknown[];
+  files_changed: unknown[];
+  pr_links: PrLink[];
+}
+
 export interface EvaluatorInfo {
   agent: Agent;
   model: string;
