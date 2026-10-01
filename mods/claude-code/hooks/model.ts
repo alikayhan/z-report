@@ -20,6 +20,9 @@ export function atLeast(version: string, minimum: string): boolean {
   return true;
 }
 
+// The terminal Select refuses more than 64 options; the picker pages at that size.
+export const PICKER_LIMIT = 64;
+
 export type Host = {
   root: string;
   run: (argv: string[], init: ProcessRunInit) => Promise<ProcessRunResult>;
@@ -80,6 +83,25 @@ export class Model {
     return (
       this.candidates.find((c) => c.id === this.selected) ?? this.candidates[0]
     );
+  }
+  get picker() {
+    const index = Math.max(
+      0,
+      this.candidates.findIndex((c) => c.id === this.candidate?.id),
+    );
+    const start = index - (index % PICKER_LIMIT);
+    return {
+      items: this.candidates.slice(start, start + PICKER_LIMIT),
+      start,
+      total: this.candidates.length,
+    };
+  }
+  pick(id: string | undefined) {
+    if (!id) return;
+    this.selected = id;
+    this.editing = null;
+    this.evidence = "";
+    this.host.redraw();
   }
   async call<T>(action: string, fields: object = {}): Promise<T> {
     if (this.directory === undefined) {
