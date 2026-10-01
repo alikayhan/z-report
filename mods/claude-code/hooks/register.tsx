@@ -55,7 +55,6 @@ export const register: Register = (on) => {
       id: "z-report",
       title: "Z Report",
       focus: true,
-      closeOnEscape: true,
       rows: 20,
     });
     const m = model;
@@ -161,6 +160,11 @@ export const register: Register = (on) => {
             key="refresh"
             label="Refresh"
             onPress={() => action(() => m.refresh())}
+          />
+          <Button
+            key="close"
+            label="Close"
+            onPress={() => void $.ui.close({ id: "z-report" })}
           />
         </Box>
         <Text>
@@ -629,7 +633,8 @@ export const register: Register = (on) => {
           </Box>
         )}
         <Text dimColor>
-          Escape closes the pane. Reads continue while this session is alive.
+          Escape returns to the prompt; Close or ctrl+x x closes the pane. Reads
+          continue while this session is alive.
         </Text>
       </Box>
     );

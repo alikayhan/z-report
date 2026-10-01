@@ -35,6 +35,11 @@ function world(
     opened.push(e.id);
     return { value: undefined };
   });
+  const closed: string[] = [];
+  on("ui.close", ($, e) => {
+    closed.push(e.id);
+    return { value: undefined };
+  });
   on("ui.invalidate", () => ({ value: undefined }));
   const notices: string[] = [];
   on("ui.log", ($, e) => {
@@ -158,7 +163,7 @@ function world(
       },
     };
   });
-  return { clock, registered, opened, calls, notices };
+  return { clock, registered, opened, closed, calls, notices };
 }
 const pane = {
   surface: "terminal" as const,
@@ -466,6 +471,26 @@ describe("Z Report", () => {
     );
     expect(body).toContain("3 commands · 1 commit · 2 files · PRs #12 · main");
     expect(body).not.toContain("session_id");
+  });
+  test("escape leaves the pane open and the Close button closes it", async ($, on) => {
+    const w = world(on, { cards: 1 });
+    await $.session.start({
+      cwd: "/work",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    await w.clock.settle();
+    await $.command.run(command(""));
+    await w.clock.settle();
+    expect(w.opened).toEqual(["z-report"]);
+    await $.ui.render(pane);
+    await $.ui.press({
+      plugin: "z-report",
+      key: "close",
+      requestId: "z-report",
+    });
+    await w.clock.settle();
+    expect(w.closed).toEqual(["z-report"]);
   });
   test("a newer Claude Code version than the tested one is accepted", async ($, on) => {
     const w = world(on, { hostVersion: "2.1.286" });
