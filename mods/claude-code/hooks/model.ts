@@ -5,6 +5,8 @@ import type {
   Settings,
   ExportData,
   EvalRun,
+  PrLink,
+  SessionFacts,
 } from "../../../src/types";
 export type { Candidate, Settings };
 export function atLeast(version: string, minimum: string): boolean {
@@ -22,6 +24,41 @@ export function atLeast(version: string, minimum: string): boolean {
 
 // The terminal Select refuses more than 64 options; the picker pages at that size.
 export const PICKER_LIMIT = 64;
+
+export const plural = (n: number, word: string, words = word + "s") =>
+  `${n} ${n === 1 ? word : words}`;
+
+export const repoName = (repo: string) =>
+  repo.split("/").filter(Boolean).pop() ?? repo;
+
+export function prLabels(links: PrLink[]): string[] {
+  const repos = new Set(links.map((p) => p.repository));
+  return links.map((p) =>
+    repos.size > 1 ? `${p.repository}#${p.number}` : `#${p.number}`,
+  );
+}
+
+export function summarizeSession(s: SessionFacts) {
+  const clock = (ts: string) =>
+    new Date(ts).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  const span =
+    s.first_ts && s.last_ts
+      ? ` · ${clock(s.first_ts)}–${clock(s.last_ts)}`
+      : "";
+  const head = `${s.title ?? s.session_id.slice(0, 8)} · ${s.agent}${s.cli_version ? ` ${s.cli_version}` : ""}${span}`;
+  const parts = [
+    plural(s.commands.length, "command"),
+    plural(s.commits.length, "commit"),
+    plural(s.files_changed.length, "file"),
+  ];
+  if (s.pr_links.length) parts.push(`PRs ${prLabels(s.pr_links).join(" ")}`);
+  if (s.git_branch) parts.push(s.git_branch);
+  return { head, detail: parts.join(" · ") };
+}
 
 export type Host = {
   root: string;
@@ -59,7 +96,8 @@ export class Model {
   selected = "";
   mergeIds: string[] = [];
   editing: Candidate | null = null;
-  evidence = "";
+  questionsFor: string | null = null;
+  sessions: { id: string; facts: SessionFacts[] } | null = null;
   journal: JournalEntry[] = [];
   export: ExportData | null = null;
   settings: Settings | null = null;
@@ -100,7 +138,6 @@ export class Model {
     if (!id) return;
     this.selected = id;
     this.editing = null;
-    this.evidence = "";
     this.host.redraw();
   }
   async call<T>(action: string, fields: object = {}): Promise<T> {
@@ -277,7 +314,6 @@ export class Model {
   async mutate(action: string, candidate: Candidate) {
     await this.call(action, { id: candidate.id, revision: candidate.revision });
     this.editing = null;
-    this.evidence = "";
     await this.refresh();
   }
   async saveEdit() {
@@ -306,10 +342,10 @@ export class Model {
     await this.refresh();
   }
   async showEvidence(c: Candidate) {
-    const evidence = await this.call<unknown[]>("evidence", {
+    const facts = await this.call<SessionFacts[]>("evidence", {
       ids: c.session_ids,
     });
-    this.evidence = JSON.stringify(evidence, null, 2);
+    this.sessions = { id: c.id, facts };
   }
   period(days: number) {
     const end = this.overview?.today ?? this.to;

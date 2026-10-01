@@ -1,5 +1,13 @@
 import type { Register } from "claude-code";
-import { Model, PICKER_LIMIT, active } from "./model";
+import {
+  Model,
+  PICKER_LIMIT,
+  active,
+  plural,
+  prLabels,
+  repoName,
+  summarizeSession,
+} from "./model";
 
 export const register: Register = (on) => {
   let model: Model | null = null;
@@ -74,6 +82,8 @@ export const register: Register = (on) => {
     const c = m.candidate;
     const picker = m.picker;
     const draft = m.editing;
+    const questions = !!c && m.questionsFor === c.id;
+    const sessions = c && m.sessions?.id === c.id ? m.sessions.facts : null;
     const settings = m.settings;
     const range = (
       <Box flexDirection="column">
@@ -186,7 +196,6 @@ export const register: Register = (on) => {
           onSelect={(v) =>
             action(async () => {
               m.tab = v;
-              m.evidence = "";
               m.editing = null;
               await m.loadTab();
             })
@@ -206,7 +215,6 @@ export const register: Register = (on) => {
                 action(async () => {
                   m.status = v;
                   m.editing = null;
-                  m.evidence = "";
                   await m.loadTab();
                 })
               }
@@ -255,19 +263,32 @@ export const register: Register = (on) => {
             {c && !draft && (
               <Box flexDirection="column" gap={1}>
                 <Text bold>{c.title}</Text>
-                <Text>{`${c.day}${c.day_end ? ` – ${c.day_end}` : ""} · ${c.agents.join(" + ")} · evidence ${c.evidence_level}${c.repo ? ` · ${c.repo}` : ""}`}</Text>
+                <Text>{`${c.day}${c.day_end ? ` – ${c.day_end}` : ""} · ${c.agents.join(" + ")} · evidence ${c.evidence_level}${c.repo ? ` · ${repoName(c.repo)}` : ""}`}</Text>
                 <Text>{c.contribution}</Text>
                 {c.outcomes.map((o, i) => (
                   <Text
                     key={`outcome-${i}`}
-                  >{`${o.verified ? "✓" : "○"} ${o.claim} [${o.evidence_refs.join(", ")}]`}</Text>
+                  >{`${o.verified ? "✓" : "○"} ${o.claim}`}</Text>
                 ))}
-                {c.uncertainties.map((u, i) => (
-                  <Text key={`uncertain-${i}`}>{`Uncertain: ${u}`}</Text>
-                ))}
-                {c.pr_links.map((p) => (
-                  <Text key={p.url}>{p.url}</Text>
-                ))}
+                {!!c.uncertainties.length && (
+                  <Box flexDirection="column">
+                    <Button
+                      key="uncertainties"
+                      label={`${questions ? "Hide" : "Show"} ${plural(c.uncertainties.length, "open question")}`}
+                      onPress={() => {
+                        m.questionsFor = questions ? null : c.id;
+                        redraw();
+                      }}
+                    />
+                    {questions &&
+                      c.uncertainties.map((u, i) => (
+                        <Text key={`uncertain-${i}`}>{`· ${u}`}</Text>
+                      ))}
+                  </Box>
+                )}
+                {!!c.pr_links.length && (
+                  <Text>{`PRs ${prLabels(c.pr_links).join(" ")}`}</Text>
+                )}
                 {c.status === "pending" ? (
                   <Box flexDirection="column" gap={1}>
                     <Box gap={1}>
@@ -342,15 +363,26 @@ export const register: Register = (on) => {
                 )}
                 <Button
                   key="evidence"
-                  label={m.evidence ? "Hide evidence" : "Inspect evidence"}
+                  label={sessions ? "Hide evidence" : "Inspect evidence"}
                   onPress={() =>
                     action(async () => {
-                      if (m.evidence) m.evidence = "";
+                      if (sessions) m.sessions = null;
                       else await m.showEvidence(c);
                     })
                   }
                 />
-                {m.evidence && <Text>{m.evidence}</Text>}
+                {sessions && !sessions.length && (
+                  <Text>No sessions recorded for this card.</Text>
+                )}
+                {sessions?.map((s) => {
+                  const line = summarizeSession(s);
+                  return (
+                    <Box key={s.session_id} flexDirection="column">
+                      <Text bold>{line.head}</Text>
+                      <Text>{line.detail}</Text>
+                    </Box>
+                  );
+                })}
               </Box>
             )}
             {draft && (

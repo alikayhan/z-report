@@ -4,10 +4,19 @@ import { describe, expect, mock, test, tier } from "claude-code/testing";
 tier("user");
 function world(
   on: On,
-  protocol = 1,
-  evaluator = false,
-  hostVersion = "2.1.273",
-  withCard: boolean | number = false,
+  {
+    protocol = 1,
+    evaluator = false,
+    hostVersion = "2.1.273",
+    cards = 0,
+    card = {},
+  }: {
+    protocol?: number;
+    evaluator?: boolean;
+    hostVersion?: string;
+    cards?: number;
+    card?: Record<string, unknown>;
+  } = {},
 ) {
   const clock = mock.clock(on);
   mock.env(on, {
@@ -84,25 +93,47 @@ function world(
       input.action === "eval_runs"
     )
       data = [];
-    if (withCard && input.action === "candidates")
-      data = Array.from(
-        { length: withCard === true ? 1 : withCard },
-        (_, i) => ({
-          id: i === 0 ? "card" : `card-${i + 1}`,
-          revision: 7,
-          day: "2026-09-15",
-          title: i === 0 ? "Fixture" : `Fixture ${i + 1}`,
-          contribution: "Recorded work",
-          outcomes: [],
-          uncertainties: [],
-          agents: ["claude"],
-          pr_links: [],
-          session_ids: ["session"],
-          evidence_level: 2,
-          status: "pending",
-          related: null,
-        }),
-      );
+    if (cards && input.action === "candidates")
+      data = Array.from({ length: cards }, (_, i) => ({
+        id: i === 0 ? "card" : `card-${i + 1}`,
+        revision: 7,
+        day: "2026-09-15",
+        title: i === 0 ? "Fixture" : `Fixture ${i + 1}`,
+        contribution: "Recorded work",
+        outcomes: [],
+        uncertainties: [],
+        agents: ["claude"],
+        pr_links: [],
+        session_ids: ["session"],
+        evidence_level: 2,
+        status: "pending",
+        related: null,
+        repo: "/work/org/repo",
+        ...(i === 0 ? card : {}),
+      }));
+    if (input.action === "evidence")
+      data = [
+        {
+          session_id: "session",
+          title: "Fixture session",
+          agent: "claude",
+          cli_version: "2.1.273",
+          first_ts: "2026-09-15T08:05:00.000Z",
+          last_ts: "2026-09-15T09:40:00.000Z",
+          git_branch: "main",
+          commands: [{}, {}, {}],
+          commits: [{}],
+          files_changed: [{}, {}],
+          pr_links: [
+            {
+              number: 12,
+              repository: "org/repo",
+              ts: null,
+              url: "https://x/12",
+            },
+          ],
+        },
+      ];
     if (input.action === "export")
       data = { markdown: "# Journal", entries: [] };
     if (input.action === "update_settings") data = settings;
@@ -158,6 +189,12 @@ const find = (node: unknown, test: (n: Node) => boolean): Node | undefined => {
   return undefined;
 };
 const byKey = (key: string) => (n: Node) => n.props?.key === key;
+const texts = (node: unknown, out: string[] = []): string[] => {
+  if (typeof node === "string") out.push(node);
+  else if (node && typeof node === "object")
+    for (const child of (node as Node).children ?? []) texts(child, out);
+  return out;
+};
 const command = (args: string) => ({
   command: "z-report",
   args,
@@ -194,7 +231,7 @@ describe("Z Report", () => {
     expect(w.calls).toEqual([]);
   });
   test("nested evaluator gate wins over an interactive host", async ($, on) => {
-    const w = world(on, 1, true);
+    const w = world(on, { evaluator: true });
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
@@ -273,7 +310,7 @@ describe("Z Report", () => {
     ).toBe(1);
   });
   test("incompatible engines never access the database", async ($, on) => {
-    const w = world(on, 99);
+    const w = world(on, { protocol: 99 });
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
@@ -289,7 +326,7 @@ describe("Z Report", () => {
     ).toBe(true);
   });
   test("review saves and approval preserve the revision", async ($, on) => {
-    const w = world(on, 1, false, "2.1.273", true);
+    const w = world(on, { cards: 1 });
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
@@ -330,7 +367,7 @@ describe("Z Report", () => {
     ).toBe(7);
   });
   test("the candidate picker pages at the Select limit", async ($, on) => {
-    const w = world(on, 1, false, "2.1.273", 65);
+    const w = world(on, { cards: 65 });
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
@@ -357,8 +394,81 @@ describe("Z Report", () => {
     expect(find(tree, byKey("earlier"))).toBeDefined();
     expect(find(tree, byKey("later"))).toBeUndefined();
   });
+  test("the card hides evidence ids, urls and open questions", async ($, on) => {
+    const w = world(on, {
+      cards: 1,
+      card: {
+        outcomes: [
+          {
+            claim: "Shipped the thing",
+            evidence_level: 3,
+            evidence_refs: ["cmd:session:4", "pr:org/repo#12"],
+            verified: true,
+          },
+        ],
+        uncertainties: ["Was it deployed?", "Did the docs change?"],
+        pr_links: [
+          { number: 12, repository: "org/repo", ts: "", url: "https://x/12" },
+          { number: 3, repository: "org/repo", ts: "", url: "https://x/3" },
+        ],
+      },
+    });
+    await $.session.start({
+      cwd: "/work",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    await w.clock.settle();
+    await $.command.run(command(""));
+    await w.clock.settle();
+    let tree = await $.ui.render(pane);
+    let body = texts(tree).join("\n");
+    expect(body).toContain("✓ Shipped the thing");
+    expect(body).toContain("evidence 2 · repo");
+    expect(body).not.toContain("/work/org/repo");
+    expect(body).not.toContain("cmd:session:4");
+    expect(body).toContain("PRs #12 #3");
+    expect(body).not.toContain("https://x/12");
+    expect(body).not.toContain("Was it deployed?");
+    expect(find(tree, byKey("uncertainties"))?.props?.label).toBe(
+      "Show 2 open questions",
+    );
+    await $.ui.press({
+      plugin: "z-report",
+      key: "uncertainties",
+      requestId: "z-report",
+    });
+    await w.clock.settle();
+    tree = await $.ui.render(pane);
+    body = texts(tree).join("\n");
+    expect(body).toContain("· Was it deployed?");
+  });
+  test("inspecting evidence summarises each session", async ($, on) => {
+    const w = world(on, { cards: 1 });
+    await $.session.start({
+      cwd: "/work",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    await w.clock.settle();
+    await $.command.run(command(""));
+    await w.clock.settle();
+    await $.ui.render(pane);
+    await $.ui.press({
+      plugin: "z-report",
+      key: "evidence",
+      requestId: "z-report",
+    });
+    await w.clock.settle();
+    const body = texts(await $.ui.render(pane)).join("\n");
+    expect(body).toMatch(
+      /Fixture session · claude 2\.1\.273 · \d\d:\d\d–\d\d:\d\d/,
+    );
+    expect(body).toContain("3 commands · 1 commit · 2 files · PRs #12 · main");
+    expect(body).not.toContain("session_id");
+  });
   test("a newer Claude Code version than the tested one is accepted", async ($, on) => {
-    const w = world(on, 1, false, "2.1.286");
+    const w = world(on, { hostVersion: "2.1.286" });
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
@@ -370,7 +480,7 @@ describe("Z Report", () => {
     expect(w.calls.some((c) => c.input.action === "read_start")).toBe(true);
   });
   test("an older Claude Code version than the tested one cannot access the database", async ($, on) => {
-    const w = world(on, 1, false, "2.1.272");
+    const w = world(on, { hostVersion: "2.1.272" });
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
