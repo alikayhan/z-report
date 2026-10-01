@@ -7,7 +7,7 @@ function world(
   protocol = 1,
   evaluator = false,
   hostVersion = "2.1.273",
-  withCard = false,
+  withCard: boolean | number = false,
 ) {
   const clock = mock.clock(on);
   mock.env(on, {
@@ -85,12 +85,13 @@ function world(
     )
       data = [];
     if (withCard && input.action === "candidates")
-      data = [
-        {
-          id: "card",
+      data = Array.from(
+        { length: withCard === true ? 1 : withCard },
+        (_, i) => ({
+          id: i === 0 ? "card" : `card-${i + 1}`,
           revision: 7,
           day: "2026-09-15",
-          title: "Fixture",
+          title: i === 0 ? "Fixture" : `Fixture ${i + 1}`,
           contribution: "Recorded work",
           outcomes: [],
           uncertainties: [],
@@ -100,8 +101,8 @@ function world(
           evidence_level: 2,
           status: "pending",
           related: null,
-        },
-      ];
+        }),
+      );
     if (input.action === "export")
       data = { markdown: "# Journal", entries: [] };
     if (input.action === "update_settings") data = settings;
@@ -128,6 +129,35 @@ function world(
   });
   return { clock, registered, opened, calls, notices };
 }
+const pane = {
+  surface: "terminal" as const,
+  component: "Pane" as const,
+  requestId: "z-report",
+  props: {
+    title: "Z Report",
+    isFocused: true,
+    bodyColumns: 40,
+    placement: "inline" as const,
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+};
+type Node = {
+  type?: string;
+  props?: Record<string, unknown>;
+  children?: unknown[];
+};
+const find = (node: unknown, test: (n: Node) => boolean): Node | undefined => {
+  if (!node || typeof node !== "object") return undefined;
+  const n = node as Node;
+  if (test(n)) return n;
+  for (const child of n.children ?? []) {
+    const hit = find(child, test);
+    if (hit) return hit;
+  }
+  return undefined;
+};
+const byKey = (key: string) => (n: Node) => n.props?.key === key;
 const command = (args: string) => ({
   command: "z-report",
   args,
@@ -268,19 +298,6 @@ describe("Z Report", () => {
     await w.clock.settle();
     await $.command.run(command(""));
     await w.clock.settle();
-    const pane = {
-      surface: "terminal" as const,
-      component: "Pane" as const,
-      requestId: "z-report",
-      props: {
-        title: "Z Report",
-        isFocused: true,
-        bodyColumns: 40,
-        placement: "inline" as const,
-        scroll: { offset: 0, bodyRows: 20 },
-        view: {},
-      },
-    };
     await $.ui.render(pane);
     await $.ui.press({
       plugin: "z-report",
@@ -311,6 +328,34 @@ describe("Z Report", () => {
       w.calls.find((c) => c.input.action === "approve_candidate")?.input
         .revision,
     ).toBe(7);
+  });
+  test("the candidate picker pages at the Select limit", async ($, on) => {
+    const w = world(on, 1, false, "2.1.273", 65);
+    await $.session.start({
+      cwd: "/work",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    await w.clock.settle();
+    await $.command.run(command(""));
+    await w.clock.settle();
+    let tree = await $.ui.render(pane);
+    let select = find(tree, byKey("candidate"));
+    expect((select?.props?.options as unknown[]).length).toBe(64);
+    expect(find(tree, byKey("earlier"))).toBeUndefined();
+    expect(find(tree, byKey("later"))).toBeDefined();
+    await $.ui.press({
+      plugin: "z-report",
+      key: "later",
+      requestId: "z-report",
+    });
+    await w.clock.settle();
+    tree = await $.ui.render(pane);
+    select = find(tree, byKey("candidate"));
+    expect(select?.props?.value).toBe("card-65");
+    expect((select?.props?.options as unknown[]).length).toBe(1);
+    expect(find(tree, byKey("earlier"))).toBeDefined();
+    expect(find(tree, byKey("later"))).toBeUndefined();
   });
   test("a newer Claude Code version than the tested one is accepted", async ($, on) => {
     const w = world(on, 1, false, "2.1.286");

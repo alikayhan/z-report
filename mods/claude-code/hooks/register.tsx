@@ -1,5 +1,5 @@
 import type { Register } from "claude-code";
-import { Model, active } from "./model";
+import { Model, PICKER_LIMIT, active } from "./model";
 
 export const register: Register = (on) => {
   let model: Model | null = null;
@@ -72,6 +72,7 @@ export const register: Register = (on) => {
     };
     const redraw = () => m.host.redraw();
     const c = m.candidate;
+    const picker = m.picker;
     const draft = m.editing;
     const settings = m.settings;
     const range = (
@@ -215,20 +216,40 @@ export const register: Register = (on) => {
                 No {m.status} candidates. X-read checks for recent work.
               </Text>
             )}
-            {!!m.candidates.length && (
+            {picker.total > PICKER_LIMIT && (
+              <Box gap={1}>
+                {picker.start > 0 && (
+                  <Button
+                    key="earlier"
+                    label="Earlier"
+                    onPress={() => m.pick(m.candidates[picker.start - 1]?.id)}
+                  />
+                )}
+                <Text
+                  dimColor
+                >{`${picker.start + 1}–${picker.start + picker.items.length} of ${picker.total}`}</Text>
+                {picker.start + picker.items.length < picker.total && (
+                  <Button
+                    key="later"
+                    label="Later"
+                    onPress={() =>
+                      m.pick(
+                        m.candidates[picker.start + picker.items.length]?.id,
+                      )
+                    }
+                  />
+                )}
+              </Box>
+            )}
+            {!!picker.items.length && (
               <Select
                 key="candidate"
                 value={c?.id}
-                options={m.candidates.map((c) => ({
+                options={picker.items.map((c) => ({
                   value: c.id,
                   label: `${c.day} · ${c.title}`,
                 }))}
-                onSelect={(v) => {
-                  m.selected = v;
-                  m.editing = null;
-                  m.evidence = "";
-                  redraw();
-                }}
+                onSelect={(v) => m.pick(v)}
               />
             )}
             {c && !draft && (

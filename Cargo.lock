@@ -5408,7 +5408,7 @@ dependencies = [
 
 [[package]]
 name = "z-report"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5428,7 +5428,7 @@ dependencies = [
 
 [[package]]
 name = "z-report-cli"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5440,7 +5440,7 @@ dependencies = [
 
 [[package]]
 name = "z-report-core"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "chrono",
