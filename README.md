@@ -131,23 +131,32 @@ the entry, instead of quietly appearing as a second copy of something you have r
 
 `/z-report` opens the review queue in a Claude Code pane: approve, edit, merge, discard,
 search the journal, and export, against the same local store the desktop app uses.
-`/z-report x-read` starts a read and `/z-report cancel` stops it. A read in either client
-shows as running in the other, and edits carry a revision so a card changed in one place
-cannot be silently overwritten from the other. With "Catch up in Claude Code after 24
-hours" on (Settings), an interactive session runs a read by itself once a day has passed
-without one.
+`/z-report x-read` starts a read and `/z-report cancel` stops it. Inside the pane, Tab
+moves between controls, Enter picks, Escape returns to the prompt and Close dismisses the
+pane. A read in either client shows as running in the other, and edits carry a revision
+so a card changed in one place cannot be silently overwritten from the other. With
+"Catch up in Claude Code after 24 hours" on (Settings), an interactive session runs a
+read by itself once a day has passed without one.
 
 The mod bundles its own copy of the engine and needs:
 
 - macOS on Apple Silicon
-- Claude Code 2.1.273 or newer — the mod checks this before touching the journal. It was
-  tested against 2.1.273 and 2.1.286; the function-hooks API is early access and may
+- Claude Code 2.1.273 or newer. The mod checks this before touching the journal. It was
+  tested against 2.1.273 through 2.1.287; the function-hooks API is early access and may
   change without notice, so newer releases are accepted but not guaranteed
 - `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment
-- if you already use the desktop app, Z Report 0.2.3 or later, opened once — only the
+- if you already use the desktop app, Z Report 0.2.3 or later, opened once. Only the
   desktop app upgrades an existing journal, so an older app is never locked out of it
 
-To install from a checkout:
+Released builds install from the public marketplace in
+[z-report-releases](https://github.com/alikayhan/z-report-releases):
+
+```sh
+claude plugin marketplace add alikayhan/z-report-releases
+claude plugin install z-report@z-report
+```
+
+To install from a checkout instead:
 
 ```sh
 npm run mod:package
@@ -218,11 +227,13 @@ The tag triggers `.github/workflows/release.yml`, which tests, builds
 `aarch64-apple-darwin`, signs, notarizes, and staples the app and DMG, and publishes the
 DMG, updater archive (`.app.tar.gz` + `.sig`), the notarized Claude Code mod archive,
 `latest.json`, and `checksums.txt` to the
-public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository.
-Installed apps discover the release through `latest.json`; Homebrew users get it once
-`Casks/z-report.rb` in [homebrew-tap](https://github.com/alikayhan/homebrew-tap) is
-bumped — the workflow's run summary includes a paste-ready Cask rendered from
-`packaging/homebrew/` with the new version and DMG SHA-256 filled in.
+public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository,
+then rewrites that repository's `.claude-plugin/marketplace.json` to point at the new mod
+archive. Installed apps discover the release through `latest.json`, and the mod through
+the marketplace. Homebrew users get it once `Casks/z-report.rb` in
+[homebrew-tap](https://github.com/alikayhan/homebrew-tap) is bumped; the workflow's run
+summary includes a paste-ready Cask rendered from `packaging/homebrew/` with the new
+version and DMG SHA-256 filled in.
 
 Required GitHub Actions secrets:
 

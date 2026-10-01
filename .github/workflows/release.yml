@@ -183,6 +183,25 @@ jobs:
             --title "Z Report ${VERSION}" --notes-file notes.md
           gh release upload "$TAG" --repo "$RELEASE_REPO" release-assets/*
           gh release edit "$TAG" --repo "$RELEASE_REPO" --draft=false --latest
+
+          ZIP="z-report-${VERSION}-aarch64-apple-darwin.zip"
+          ZIP_SHA=$(shasum -a 256 "release-assets/$ZIP" | cut -d' ' -f1)
+          jq -n \
+            --arg version "$VERSION" \
+            --arg url "https://github.com/${RELEASE_REPO}/releases/download/${TAG}/${ZIP}" \
+            --arg sha "$ZIP_SHA" \
+            '{name: "z-report", owner: {name: "Z Report"},
+              plugins: [{name: "z-report",
+                         description: "An evidence-backed journal of local Claude Code and Codex work",
+                         version: $version,
+                         source: {source: "archive", url: $url, sha256: $sha}}]}' \
+            > marketplace.json
+          MANIFEST="repos/${RELEASE_REPO}/contents/.claude-plugin/marketplace.json"
+          EXISTING=$(gh api "$MANIFEST" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "$MANIFEST" \
+            -f message="z-report ${VERSION}" \
+            -f content="$(base64 < marketplace.json | tr -d '\n')" \
+            ${EXISTING:+-f sha="$EXISTING"} > /dev/null
         env:
           GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
 
