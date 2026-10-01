@@ -312,8 +312,20 @@ describe("Z Report", () => {
         .revision,
     ).toBe(7);
   });
-  test("an unsupported Claude Code version cannot access the database", async ($, on) => {
-    const w = world(on, 1, false, "2.0.0");
+  test("a newer Claude Code version than the tested one is accepted", async ($, on) => {
+    const w = world(on, 1, false, "2.1.286");
+    await $.session.start({
+      cwd: "/work",
+      surface: "terminal",
+      isInteractive: true,
+    });
+    await w.clock.settle();
+    await $.command.run(command("x-read"));
+    await w.clock.settle();
+    expect(w.calls.some((c) => c.input.action === "read_start")).toBe(true);
+  });
+  test("an older Claude Code version than the tested one cannot access the database", async ($, on) => {
+    const w = world(on, 1, false, "2.1.272");
     await $.session.start({
       cwd: "/work",
       surface: "terminal",
