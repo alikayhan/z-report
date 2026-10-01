@@ -7,6 +7,19 @@ import type {
   EvalRun,
 } from "../../../src/types";
 export type { Candidate, Settings };
+export function atLeast(version: string, minimum: string): boolean {
+  const parse = (v: string) => v.split(".").map((n) => Number.parseInt(n, 10));
+  const a = parse(version),
+    b = parse(minimum);
+  if (a.some(Number.isNaN) || a.length === 0) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0,
+      y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
+
 export type Host = {
   root: string;
   run: (argv: string[], init: ProcessRunInit) => Promise<ProcessRunResult>;
@@ -91,10 +104,13 @@ export class Model {
       });
       if (
         host.exitCode !== 0 ||
-        host.stdout.trim().split(/\s+/)[0] !== info.data.tested_host
+        !atLeast(
+          host.stdout.trim().split(/\s+/)[0] ?? "",
+          info.data.tested_host,
+        )
       ) {
         throw new Error(
-          `This Z Report package supports Claude Code ${info.data.tested_host}. Use the matching Claude Code and Z Report versions.`,
+          `This Z Report package needs Claude Code ${info.data.tested_host} or newer. Update Claude Code or install a matching Z Report package.`,
         );
       }
       this.directory = (await this.host.dataOverride()) ?? "";

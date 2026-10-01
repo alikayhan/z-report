@@ -140,8 +140,9 @@ without one.
 The mod bundles its own copy of the engine and needs:
 
 - macOS on Apple Silicon
-- exactly the Claude Code version it was tested against (2.1.273 for 0.2.5) — the mod
-  checks this before touching the journal
+- Claude Code 2.1.273 or newer — the mod checks this before touching the journal. It was
+  tested against 2.1.273 and 2.1.286; the function-hooks API is early access and may
+  change without notice, so newer releases are accepted but not guaranteed
 - `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment
 - if you already use the desktop app, Z Report 0.2.3 or later, opened once — only the
   desktop app upgrades an existing journal, so an older app is never locked out of it
