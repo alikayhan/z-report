@@ -70,12 +70,18 @@ directory holding only the evidence package.
 
 ## Claude Code mod
 
-`/z-report` opens the same review queue and journal in a Claude Code pane, in the terminal
-or in the Code tab of the Claude desktop app.
+`/z-report` opens the same review queue and journal in a Claude Code pane. In the terminal,
+it opens beside your session, here reviewing a candidate:
 
 <p align="center">
-  <img src="docs/screenshots/mod-terminal-review.webp" width="400" alt="The Z Report review queue in a Claude Code terminal pane, showing a candidate with its outcomes and the approve, edit, and discard buttons">
-  <img src="docs/screenshots/mod-desktop-export.webp" width="400" alt="The Z Report export view in the Code tab of the Claude desktop app, with a date range and the Markdown preview">
+  <img src="docs/screenshots/mod-terminal-review.webp" width="720" alt="The Z Report review queue in a Claude Code terminal pane, showing a candidate with its outcomes and the approve, edit, and discard buttons">
+</p>
+
+In the Code tab of the Claude desktop app, it opens as a side panel, here exporting a date
+range to Markdown:
+
+<p align="center">
+  <img src="docs/screenshots/mod-desktop-export.webp" width="720" alt="The Z Report export view in the Code tab of the Claude desktop app, with a date range and the Markdown preview">
 </p>
 
 It needs Claude Code 2.1.273 or newer with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` set, and,
