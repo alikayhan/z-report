@@ -7,11 +7,11 @@
     {
       "name": "z-report",
       "description": "An evidence-backed journal of local Claude Code and Codex work",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "source": {
         "source": "archive",
-        "url": "https://github.com/alikayhan/z-report/releases/download/v0.3.0/z-report-0.3.0-aarch64-apple-darwin.zip",
-        "sha256": "6cb6c9dcc0f7a69ce60d6e69c1588a69c07ccb24bab241de5d7ed190725cac1e"
+        "url": "https://github.com/alikayhan/z-report/releases/download/v0.3.1/z-report-0.3.1-aarch64-apple-darwin.zip",
+        "sha256": "a37d13960ec5778b0370225d3a7a74a1fb8f9b24cfadec09bcf0faa393b4fc06"
       }
     }
   ]
