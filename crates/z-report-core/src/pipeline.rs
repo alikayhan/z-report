@@ -366,7 +366,7 @@ mod tests {
             session_ids: vec![format!("s-{id}")],
             agents: vec![Agent::Claude],
             pr_links: vec![],
-            repo: Some("/r/synapse".into()),
+            repo: Some("/r/ledger".into()),
             model: None,
             status: "pending".into(),
             related: None,
