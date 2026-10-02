@@ -49,6 +49,25 @@ warning to click through.
   works, including `brew install --cask claude-code` or `brew install --cask codex`.
   Evaluations run on your own account: Claude Code when it is present, Codex otherwise.
 
+## Claude Code mod
+
+Z Report also runs inside Claude Code. `/z-report` opens the same review queue and
+journal in a pane, so you can approve cards without leaving the terminal. It uses an
+early-access Claude Code feature and needs:
+
+- Claude Code 2.1.273 or newer
+- `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in your environment, for example under `env`
+  in `~/.claude/settings.json`
+- if you use the desktop app, Z Report 0.2.3 or newer, opened once
+
+```sh
+claude plugin marketplace add alikayhan/z-report-releases
+claude plugin install z-report@z-report
+```
+
+Start a new Claude Code session and run `/z-report`. New versions arrive with
+`claude plugin update z-report@z-report`. The mod and the desktop app share one journal.
+
 ## How a day goes
 
 1. **Work as usual.** Every 30 minutes Z Report scans your local Claude Code and
@@ -85,17 +104,17 @@ it and says so. That is what makes the export safe to paste into a review.
 
 Everything, with two exceptions that you are told about up front.
 
-- All data — evidence, candidates, journal, settings — lives in
+- All data (evidence, candidates, journal, settings) lives in
   `~/Library/Application Support/com.alikayhan.zreport/` as SQLite. No accounts, no
   sync, no backend, no analytics, no telemetry.
-- **Exception 1 — evaluation.** Each Z-read runs on your own Claude Code account, or on
+- **Exception 1, evaluation.** Each Z-read runs on your own Claude Code account, or on
   your Codex account when Claude Code is not installed or its run fails, and sends the
   prepared evidence package (session excerpts, file paths, command results, names of
   connected tools used, commit and pull request metadata) to Anthropic, or to OpenAI for
   a Codex run. It is the same boundary as using that tool itself. Arguments passed to
   connected tools are never included; only the server and tool name. Prompt excerpts can
   be turned off in Settings → Privacy.
-- **Exception 2 — update check.** About once a day the app asks GitHub for the latest
+- **Exception 2, update check.** About once a day the app asks GitHub for the latest
   release metadata. The request carries nothing about you or your work.
 
 The evaluator itself is sandboxed: an ephemeral run with a read-only tool allowlist, a
@@ -130,6 +149,6 @@ gone.
 
 Z Report is open source at [alikayhan/z-report](https://github.com/alikayhan/z-report).
 This repository publishes the signed release binaries, the updater metadata the installed
-app checks, and the Homebrew Cask's home page. Each release is built from a version tag
-and lists the source commit it came from. Found a bug or have an idea?
-[Open an issue](https://github.com/alikayhan/z-report-releases/issues).
+app checks, the Claude Code plugin marketplace, and the Homebrew Cask's home page. Each
+release is built from a version tag and lists the source commit it came from. Found a bug
+or have an idea? [Open an issue](https://github.com/alikayhan/z-report-releases/issues).
