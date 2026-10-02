@@ -148,13 +148,16 @@ The mod bundles its own copy of the engine and needs:
 - if you already use the desktop app, Z Report 0.2.3 or later, opened once. Only the
   desktop app upgrades an existing journal, so an older app is never locked out of it
 
-Released builds install from the public marketplace in
-[z-report-releases](https://github.com/alikayhan/z-report-releases):
+Released builds install from this repository's marketplace:
 
 ```sh
-claude plugin marketplace add alikayhan/z-report-releases
+claude plugin marketplace add alikayhan/z-report
 claude plugin install z-report@z-report
 ```
+
+If you added the marketplace from `alikayhan/z-report-releases` before 0.3.0, remove it
+with `claude plugin marketplace remove z-report` and add this one; that repository is
+archived and no longer receives updates.
 
 To install from a checkout instead:
 
@@ -226,11 +229,9 @@ git push origin v0.2.0
 The tag triggers `.github/workflows/release.yml`, which tests, builds
 `aarch64-apple-darwin`, signs, notarizes, and staples the app and DMG, and publishes the
 DMG, updater archive (`.app.tar.gz` + `.sig`), the notarized Claude Code mod archive,
-`latest.json`, and `checksums.txt` to the
-public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository,
-then rewrites that repository's `.claude-plugin/marketplace.json` to point at the new mod
-archive. Installed apps discover the release through `latest.json`, and the mod through
-the marketplace. Homebrew users get it once `Casks/z-report.rb` in
+`latest.json`, and `checksums.txt` as a GitHub release on this repository, then commits
+`.claude-plugin/marketplace.json` on `main` pointing at the new mod archive. Installed
+apps discover the release through `latest.json`, and the mod through the marketplace. Homebrew users get it once `Casks/z-report.rb` in
 [homebrew-tap](https://github.com/alikayhan/homebrew-tap) is bumped; the workflow's run
 summary includes a paste-ready Cask rendered from `packaging/homebrew/Casks/z-report.rb` with the new
 version and DMG SHA-256 filled in.
@@ -247,7 +248,13 @@ Required GitHub Actions secrets:
 | `APPLE_API_KEY_CONTENT` | Contents of the App Store Connect `AuthKey_*.p8` file |
 | `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/z-report.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password (empty if none) |
-| `RELEASE_REPO_TOKEN` | Fine-grained PAT with contents write on `z-report-releases` |
+
+Releases up to 0.2.8 were published from
+[z-report-releases](https://github.com/alikayhan/z-report-releases), and apps from that
+era still poll it for `latest.json`. While the `RELEASE_REPO_TOKEN` secret (a fine-grained
+PAT with contents write on that repository) exists, the workflow also publishes
+`latest.json` and a redirecting marketplace manifest there so those installs find their
+way over. Delete the secret, and the mirror step, once that has happened.
 
 The updater private key exists only in `~/.tauri/z-report.key` and the CI secret. Back it
 up somewhere durable: shipped apps embed the public key and will reject updates signed by
