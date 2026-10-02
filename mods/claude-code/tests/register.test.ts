@@ -1,4 +1,4 @@
-import type { On } from "claude-code";
+import type { On, RenderSurface } from "claude-code";
 import { describe, expect, mock, test, tier } from "claude-code/testing";
 
 tier("user");
@@ -10,12 +10,14 @@ function world(
     hostVersion = "2.1.273",
     cards = 0,
     card = {},
+    surfaces = ["terminal"],
   }: {
     protocol?: number;
     evaluator?: boolean;
     hostVersion?: string;
     cards?: number;
     card?: Record<string, unknown>;
+    surfaces?: RenderSurface[];
   } = {},
 ) {
   const clock = mock.clock(on);
@@ -24,6 +26,12 @@ function world(
     ...(evaluator ? { Z_REPORT_EVALUATOR: "1" } : {}),
   });
   on("session.start", ($, e) => ({ cwd: e.cwd }));
+  const roster = [...surfaces];
+  on("session.surfaces", () => ({ value: roster }));
+  on("session.attach", ($, e) => {
+    roster.push(e.surface);
+    return { clientId: e.clientId };
+  });
   const registered: string[] = [],
     opened: string[] = [];
   const calls: { args: string[]; input: Record<string, unknown> }[] = [];
@@ -165,6 +173,7 @@ function world(
   });
   return { clock, registered, opened, closed, calls, notices };
 }
+const sdkStart = { cwd: "/work", surface: null, isInteractive: false };
 const pane = {
   surface: "terminal" as const,
   component: "Pane" as const,
@@ -224,15 +233,50 @@ describe("Z Report", () => {
     expect(w.opened).toEqual([]);
   });
   test("headless, SDK and evaluator sessions never call the engine", async ($, on) => {
-    const w = world(on);
-    await $.session.start({
-      cwd: "/work",
-      surface: null,
-      isInteractive: false,
-    });
+    const w = world(on, { surfaces: [] });
+    await $.session.start(sdkStart);
     const result = await $.command.run(command("x-read"));
     await w.clock.settle();
     expect(result.text).toContain("interactive");
+    expect(w.calls).toEqual([]);
+  });
+  test("the desktop app opens the same pane and catches up", async ($, on) => {
+    const w = world(on, { surfaces: ["desktop"] });
+    await $.session.start(sdkStart);
+    await w.clock.settle();
+    expect(
+      w.calls
+        .filter((c) => c.input.action === "read_start")
+        .map((c) => c.input.automatic),
+    ).toEqual([true]);
+    await $.command.run(command(""));
+    await w.clock.settle();
+    expect(w.opened).toEqual(["z-report"]);
+    const tree = await $.ui.render({ ...pane, surface: "desktop" });
+    expect(find(tree, byKey("tab"))).toBeDefined();
+    expect(texts(tree).join(" ")).not.toContain("ctrl+x");
+  });
+  test("a desktop client attaching after startup enables the journal", async ($, on) => {
+    const w = world(on, { surfaces: [] });
+    await $.session.start(sdkStart);
+    await w.clock.settle();
+    expect(w.calls).toEqual([]);
+    await $.session.attach({ surface: "desktop", clientId: "desktop:default" });
+    await w.clock.settle();
+    expect(w.calls.some((c) => c.input.action === "read_start")).toBe(true);
+  });
+  test("a mobile client alone never enables the journal", async ($, on) => {
+    const w = world(on, { surfaces: ["mobile"] });
+    await $.session.start(sdkStart);
+    await $.session.attach({ surface: "mobile", clientId: "mobile:default" });
+    await w.clock.settle();
+    expect(w.calls).toEqual([]);
+  });
+  test("the evaluator gate wins over an attached desktop", async ($, on) => {
+    const w = world(on, { evaluator: true, surfaces: ["desktop"] });
+    await $.session.start(sdkStart);
+    await $.session.attach({ surface: "desktop", clientId: "desktop:default" });
+    await w.clock.settle();
     expect(w.calls).toEqual([]);
   });
   test("nested evaluator gate wins over an interactive host", async ($, on) => {
