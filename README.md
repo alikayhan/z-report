@@ -340,3 +340,7 @@ earlier record shapes and are not read.
 Cloud sync, accounts, coding agents other than Claude Code and Codex, Slack/ticketing/GitHub API integrations,
 manager analytics, time/token reporting, monetary estimates, automatic publishing,
 cross-platform support.
+
+## License
+
+[MIT](LICENSE).

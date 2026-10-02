@@ -12,7 +12,7 @@ const candidates: Candidate[] = [
     related: {
       kind: "continuation",
       target_id: "c2",
-      target_title: "Mapped the workout-sync pipeline ahead of the offline rewrite",
+      target_title: "Mapped the note-sync pipeline ahead of the offline rewrite",
       target_day: yesterday,
       pair_key: "s1,s2~s3",
     },
@@ -31,13 +31,13 @@ const candidates: Candidate[] = [
     agents: ["claude", "codex"],
     pr_links: [
       {
-        number: 5159,
-        url: "https://github.com/acme/gymondo-ios-app/pull/5159",
-        repository: "acme/gymondo-ios-app",
+        number: 412,
+        url: "https://github.com/acme/notes-ios-app/pull/412",
+        repository: "acme/notes-ios-app",
         ts: new Date().toISOString(),
       },
     ],
-    repo: "/Users/dev/gymondo-ios-app",
+    repo: "/Users/dev/notes-ios-app",
     model: "claude-opus-5-5",
     revision: 0,
     status: "pending",
@@ -48,9 +48,9 @@ const candidates: Candidate[] = [
     day: yesterday,
     day_end: null,
     related: null,
-    title: "Mapped the workout-sync pipeline ahead of the offline rewrite",
+    title: "Mapped the note-sync pipeline ahead of the offline rewrite",
     contribution:
-      "Traced how workout events flow from HealthKit ingestion through the sync queue to the API client, and documented the three places conflict resolution can drop events.",
+      "Traced how note edits flow from CloudKit ingestion through the sync queue to the API client, and documented the three places conflict resolution can drop events.",
     outcomes: [
       { claim: "Investigation documented across two sessions", evidence_level: 1, evidence_refs: ["session:s3"], verified: true },
     ],
@@ -60,7 +60,7 @@ const candidates: Candidate[] = [
     session_ids: ["s3"],
     agents: ["claude"],
     pr_links: [],
-    repo: "/Users/dev/gymondo-ios-app",
+    repo: "/Users/dev/notes-ios-app",
     model: "claude-opus-5-5",
     revision: 0,
     status: "pending",

@@ -193,8 +193,8 @@ mod tests {
         side(
             "a",
             "2026-07-19",
-            "/Users/x/Desktop/gymondo/synapse",
-            &["Review Synapse prompt injection safety checks"],
+            "/Users/x/Desktop/acme/ledger",
+            &["Review Ledger prompt injection safety checks"],
         )
     }
 
@@ -202,8 +202,8 @@ mod tests {
         let mut m = side(
             "b",
             "2026-07-20",
-            "/Users/x/Desktop/gymondo/synapse",
-            &["Check JIRA ticket for prompt injection safety checks"],
+            "/Users/x/Desktop/acme/ledger",
+            &["Check the ticket for prompt injection safety checks"],
         );
         m.files = HashSet::from([".github/CODEOWNERS".to_string()]);
         m
@@ -227,7 +227,7 @@ mod tests {
         let analytics = side(
             "c",
             "2026-07-19",
-            "/Users/x/Desktop/gymondo/synapse",
+            "/Users/x/Desktop/acme/ledger",
             &["Add analytics to plugin usage tracking"],
         );
         assert_eq!(score(&analytics, &building()), 0.0);
@@ -238,17 +238,17 @@ mod tests {
         let mut rename = side(
             "d",
             "2026-07-18",
-            "/r/inferometer",
+            "/r/weatherdeck",
             &["Explain project in simple terms"],
         );
         let mut mock = side(
             "e",
             "2026-07-19",
-            "/r/inferometer",
-            &["Design Inferometer mock with agent split"],
+            "/r/weatherdeck",
+            &["Design Weatherdeck mock with agent split"],
         );
         let shared: HashSet<String> = (0..20)
-            .map(|i| format!("/r/inferometer/src/{i}.ts"))
+            .map(|i| format!("/r/weatherdeck/src/{i}.ts"))
             .collect();
         rename.files = shared.clone();
         mock.files = shared;
@@ -284,8 +284,8 @@ mod tests {
     fn a_shared_feature_branch_lifts_the_score_and_main_does_not() {
         let base = score(&scoping(), &building());
         let (mut a, mut b) = (scoping(), building());
-        a.branches.insert("tp-479-prompt-safety".into());
-        b.branches.insert("tp-479-prompt-safety".into());
+        a.branches.insert("ledger-479-prompt-safety".into());
+        b.branches.insert("ledger-479-prompt-safety".into());
         assert!(score(&a, &b) > base);
     }
 
@@ -303,7 +303,7 @@ mod tests {
             side(
                 "c",
                 "2026-07-19",
-                "/Users/x/Desktop/gymondo/synapse",
+                "/Users/x/Desktop/acme/ledger",
                 &["Add analytics to plugin usage tracking"],
             ),
             scoping(),

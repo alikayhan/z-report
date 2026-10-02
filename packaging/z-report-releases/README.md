@@ -128,7 +128,8 @@ gone.
 
 ## About this repository
 
-Z Report's source is private. This repository publishes the signed release binaries, the
-updater metadata the installed app checks, and the Homebrew Cask's home page. Each
-release is built from a version tag and lists the source commit it came from. Found a
-bug or have an idea? [Open an issue](https://github.com/alikayhan/z-report-releases/issues).
+Z Report is open source at [alikayhan/z-report](https://github.com/alikayhan/z-report).
+This repository publishes the signed release binaries, the updater metadata the installed
+app checks, and the Homebrew Cask's home page. Each release is built from a version tag
+and lists the source commit it came from. Found a bug or have an idea?
+[Open an issue](https://github.com/alikayhan/z-report-releases/issues).
