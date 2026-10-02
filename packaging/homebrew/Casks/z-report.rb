@@ -2,10 +2,10 @@ cask "z-report" do
   version "0.2.8"
   sha256 "10ac1a727a558294b97ac6072647854aa975d196294df33f7f6770bef81d1e12"
 
-  url "https://github.com/alikayhan/z-report-releases/releases/download/v#{version}/Z-Report_#{version}_aarch64.dmg"
+  url "https://github.com/alikayhan/z-report/releases/download/v#{version}/Z-Report_#{version}_aarch64.dmg"
   name "Z Report"
   desc "Accomplishment journal for Claude Code and Codex sessions"
-  homepage "https://github.com/alikayhan/z-report-releases"
+  homepage "https://github.com/alikayhan/z-report"
 
   auto_updates true
   depends_on arch: :arm64

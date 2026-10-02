@@ -1,0 +1,16 @@
+{
+  "name": "z-report",
+  "owner": { "name": "Z Report" },
+  "plugins": [
+    {
+      "name": "z-report",
+      "description": "An evidence-backed journal of local Claude Code and Codex work",
+      "version": "0.2.8",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/alikayhan/z-report-releases/releases/download/v0.2.8/z-report-0.2.8-aarch64-apple-darwin.zip",
+        "sha256": "a349709f414237ee055e0d0aa1881146d1857ec28f2d91dfbf2e97173c6a453a"
+      }
+    }
+  ]
+}
