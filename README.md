@@ -70,9 +70,15 @@ directory holding only the evidence package.
 
 ## Claude Code mod
 
-`/z-report` opens the same review queue and journal in a Claude Code pane. It needs Claude
-Code 2.1.273 or newer with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` set, and, if you also use
-the desktop app, Z Report 0.2.3 or later opened once.
+`/z-report` opens the same review queue and journal in a Claude Code pane, in the terminal
+or in the Code tab of the Claude desktop app. It needs Claude Code 2.1.273 or newer with
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` set, and, if you also use the Z Report app, Z Report
+0.2.3 or later opened once. The Claude desktop app doesn't read your shell environment, so
+set the flag in `~/.claude/settings.json`:
+
+```json
+{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" } }
+```
 
 ```sh
 claude plugin marketplace add alikayhan/z-report

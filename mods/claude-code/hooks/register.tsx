@@ -1,4 +1,4 @@
-import type { Register } from "claude-code";
+import type { EngineInterface, Register, RenderSurface } from "claude-code";
 import {
   Model,
   PICKER_LIMIT,
@@ -9,14 +9,22 @@ import {
   summarizeSession,
 } from "./model";
 
+const SURFACES: readonly RenderSurface[] = ["terminal", "desktop"];
+
+// The desktop app runs the session as an SDK child that reports no surface at
+// start; its client joins the roster, which also lists the REPL's terminal.
+async function present($: EngineInterface) {
+  return (
+    !(await $.env.get("Z_REPORT_EVALUATOR")) &&
+    (await $.session.surfaces()).some((s) => SURFACES.includes(s))
+  );
+}
+
 export const register: Register = (on) => {
   let model: Model | null = null;
   let interactive = false;
   on("session.start", async ($, e, next) => {
-    interactive =
-      e.isInteractive === true &&
-      e.surface === "terminal" &&
-      !(await $.env.get("Z_REPORT_EVALUATOR"));
+    interactive = await present($);
     model ??= new Model({
       root: $.plugin.root,
       run: (argv, init) => $.process.run(argv, init),
@@ -35,6 +43,12 @@ export const register: Register = (on) => {
     if (interactive) void model.auto();
     return result;
   });
+  on("session.attach", async ($, e, next) => {
+    const result = await next(e);
+    interactive = await present($);
+    if (interactive && model) void model.auto();
+    return result;
+  });
   on("classic.SessionStart", async ($, e, next) => {
     const result = await next(e);
     if (interactive && model && e.source === "resume") void model.auto();
@@ -47,7 +61,9 @@ export const register: Register = (on) => {
   });
   on("command.run", { command: "z-report" }, async ($, e) => {
     if (!interactive || !model)
-      return { text: "Z Report requires an interactive terminal session." };
+      return {
+        text: "Z Report requires an interactive terminal or desktop app session.",
+      };
     const arg = e.args.trim();
     if (!["", "x-read", "cancel"].includes(arg))
       return { text: "Usage: /z-report [x-read|cancel]" };
@@ -70,7 +86,11 @@ export const register: Register = (on) => {
     return {};
   });
   on("ui.render", { component: "Pane" }, async ($, e, next) => {
-    if (e.requestId !== "z-report" || e.surface !== "terminal" || !model)
+    if (
+      e.requestId !== "z-report" ||
+      (e.surface !== "terminal" && e.surface !== "desktop") ||
+      !model
+    )
       return next(e);
     const m = model;
     const { Box, Text, Button, Input, Select } = await $.ui.resolve(e);
@@ -633,8 +653,9 @@ export const register: Register = (on) => {
           </Box>
         )}
         <Text dimColor>
-          Escape returns to the prompt; Close or ctrl+x x closes the pane. Reads
-          continue while this session is alive.
+          {e.surface === "terminal" &&
+            "Escape returns to the prompt; Close or ctrl+x x closes the pane. "}
+          Reads continue while this session is alive.
         </Text>
       </Box>
     );
