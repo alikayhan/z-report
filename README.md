@@ -249,13 +249,6 @@ Required GitHub Actions secrets:
 | `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/z-report.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password (empty if none) |
 
-Releases up to 0.2.8 were published from
-[z-report-releases](https://github.com/alikayhan/z-report-releases), and apps from that
-era still poll it for `latest.json`. While the `RELEASE_REPO_TOKEN` secret (a fine-grained
-PAT with contents write on that repository) exists, the workflow also publishes
-`latest.json` and a redirecting marketplace manifest there so those installs find their
-way over. Delete the secret, and the mirror step, once that has happened.
-
 The updater private key exists only in `~/.tauri/z-report.key` and the CI secret. Back it
 up somewhere durable: shipped apps embed the public key and will reject updates signed by
 any other key, so losing it strands every installed copy on its current version.

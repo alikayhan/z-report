@@ -9,7 +9,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  LEGACY_RELEASE_REPO: alikayhan/z-report-releases
   BUNDLE_DIR: target/aarch64-apple-darwin/release/bundle
 
 jobs:
@@ -204,38 +203,6 @@ jobs:
             ${EXISTING:+-f sha="$EXISTING"} > /dev/null
         env:
           GH_TOKEN: ${{ github.token }}
-
-      # Installed apps up to 0.2.8 poll the old repository for latest.json, and mods
-      # installed from its marketplace only see updates published there. Delete the
-      # RELEASE_REPO_TOKEN secret once a release has shipped through this step.
-      - name: Mirror the hand-off to the previous release repository
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-          [ -n "$GH_TOKEN" ] || { echo "No RELEASE_REPO_TOKEN; skipping the hand-off"; exit 0; }
-          VERSION="${GITHUB_REF_NAME#v}"
-          TAG="v${VERSION}"
-          {
-            echo "Z Report ${VERSION}"
-            echo
-            echo "Releases now live at https://github.com/${GITHUB_REPOSITORY}/releases."
-            echo "This entry only carries latest.json so installed apps find the new location."
-            echo
-            echo "Mod users: run \`claude plugin marketplace remove z-report\` and"
-            echo "\`claude plugin marketplace add ${GITHUB_REPOSITORY}\` to keep receiving updates."
-          } > legacy-notes.md
-          gh release create "$TAG" --repo "$LEGACY_RELEASE_REPO" --draft \
-            --title "Z Report ${VERSION}" --notes-file legacy-notes.md
-          gh release upload "$TAG" --repo "$LEGACY_RELEASE_REPO" release-assets/latest.json
-          gh release edit "$TAG" --repo "$LEGACY_RELEASE_REPO" --draft=false --latest
-
-          MANIFEST="repos/${LEGACY_RELEASE_REPO}/contents/.claude-plugin/marketplace.json"
-          EXISTING=$(gh api "$MANIFEST" --jq .sha 2>/dev/null || true)
-          gh api -X PUT "$MANIFEST" \
-            -f message="z-report ${VERSION}, now published from ${GITHUB_REPOSITORY}" \
-            -f content="$(base64 < marketplace.json | tr -d '\n')" \
-            ${EXISTING:+-f sha="$EXISTING"} > /dev/null
 
       - name: Remove temporary signing material
         if: always()
