@@ -232,7 +232,7 @@ then rewrites that repository's `.claude-plugin/marketplace.json` to point at th
 archive. Installed apps discover the release through `latest.json`, and the mod through
 the marketplace. Homebrew users get it once `Casks/z-report.rb` in
 [homebrew-tap](https://github.com/alikayhan/homebrew-tap) is bumped; the workflow's run
-summary includes a paste-ready Cask rendered from `packaging/homebrew/` with the new
+summary includes a paste-ready Cask rendered from `packaging/homebrew/Casks/z-report.rb` with the new
 version and DMG SHA-256 filled in.
 
 Required GitHub Actions secrets:
