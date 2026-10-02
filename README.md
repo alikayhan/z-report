@@ -47,7 +47,7 @@ Daily flow:
    evaluator run per day, so a first run backfills about two weeks of work. The
    evaluator runs on Claude Code; when Claude Code is not installed or its run fails,
    the same evidence goes to Codex instead, and each run records which model answered.
-3. **Confirm.** Approve, edit, merge, or discard each candidate — by click or with
+3. **Confirm.** Approve, edit, merge, or discard each candidate, by click or with
    the keyboard (J/K moves through the queue, A approves, E edits, X discards).
    Cards that look like two halves of the same work say so, with the merge one
    click away. Nothing enters the journal without you, and nothing merges without
@@ -60,32 +60,32 @@ Daily flow:
 Every claim carries the highest level local facts support, and the verifier
 downgrades anything the evaluator overstated:
 
-1. **Work observed** — investigation or implementation appears in a session
-2. **Change produced** — a concrete change exists, in the repo or outside it
-3. **Locally verified** — a relevant test/build/check passed
-4. **Committed** — the change exists in a local commit, or the session recorded a
+1. **Work observed**: investigation or implementation appears in a session
+2. **Change produced**: a concrete change exists, in the repo or outside it
+3. **Locally verified**: a relevant test/build/check passed
+4. **Committed**: the change exists in a local commit, or the session recorded a
    pull request alongside a file change
-5. **Impact confirmed** — you manually confirmed a real-world outcome
+5. **Impact confirmed**: you manually confirmed a real-world outcome
 
 Verification is deterministic Rust code, not the model: commit refs are checked with
 `git cat-file`, command refs against recorded exit status, file refs against the
 session's change list, and pull request refs against links recorded in the session
 itself. Unsupported claims are downgraded and labeled.
 
-A recorded pull request proves the change was proposed, not that it merged — merge
+A recorded pull request proves the change was proposed, not that it merged. Merge
 state is not knowable offline, so it never reaches level 5 on its own. It does keep an
 achievement at level 4 after a squash merge deletes the local commit. Links are carried
 through to the journal and Markdown export, and only canonical `github.com` pull request
 URLs are kept.
 
 Not all work lands in the repository. When a session used a connected tool to change
-something outside it — commenting on a ticket, updating a document — that call is
+something outside it, such as commenting on a ticket or updating a document, that call is
 recorded as an external action and cited like any other fact. It stops at level 2: the
 call is known to have succeeded, but nothing on your Mac can confirm what it did, so the
 evaluator describes it as performed rather than as impact. Only calls that write are
 cited; searches, fetches, and screenshots are how the work got done, not what it
 produced. Nothing in a transcript says which is which, so it is inferred from the tool
-name and recorded alongside the call — a sharper guess later can reclassify calls
+name and recorded alongside the call, so a sharper guess later can reclassify calls
 already read, rather than being unable to recover what an earlier filter discarded.
 
 A session that delegates work to a sub-session is credited with it: the edits and
@@ -93,7 +93,7 @@ commands from the delegated run fold into the parent session and carry the same 
 weight, since you directed them. They are marked as delegated so the evaluator describes
 them accurately rather than as hands-on work, and so a delegated session is no longer
 mistaken for an empty one. Only the parent's prompts count as things you said, and only
-the parent's working directory defines the repository — a delegate may run in its own
+the parent's working directory defines the repository, since a delegate may run in its own
 worktree.
 
 ## Work carried across days
@@ -106,7 +106,7 @@ one piece of work.
 The signal that carries this is the session's own title: the name the tool gave it (Claude
 Code generates one from how the session opened; Codex names threads only in its desktop
 app), or the opening prompt when there is no name. Either way it is a statement of what you set out to do, so two
-sessions on one thread tend to share wording even when the finished cards do not — the
+sessions on one thread tend to share wording even when the finished cards do not. The
 evaluator rewrites each day's card in outcome-first language, which erases the overlap
 between them. Matching requires the same repository and title wording in common; shared
 files and a shared feature branch only strengthen a match that already exists. They
@@ -131,23 +131,32 @@ the entry, instead of quietly appearing as a second copy of something you have r
 
 `/z-report` opens the review queue in a Claude Code pane: approve, edit, merge, discard,
 search the journal, and export, against the same local store the desktop app uses.
-`/z-report x-read` starts a read and `/z-report cancel` stops it. A read in either client
-shows as running in the other, and edits carry a revision so a card changed in one place
-cannot be silently overwritten from the other. With "Catch up in Claude Code after 24
-hours" on (Settings), an interactive session runs a read by itself once a day has passed
-without one.
+`/z-report x-read` starts a read and `/z-report cancel` stops it. Inside the pane, Tab
+moves between controls, Enter picks, Escape returns to the prompt and Close dismisses the
+pane. A read in either client shows as running in the other, and edits carry a revision
+so a card changed in one place cannot be silently overwritten from the other. With
+"Catch up in Claude Code after 24 hours" on (Settings), an interactive session runs a
+read by itself once a day has passed without one.
 
 The mod bundles its own copy of the engine and needs:
 
 - macOS on Apple Silicon
-- Claude Code 2.1.273 or newer — the mod checks this before touching the journal. It was
-  tested against 2.1.273 and 2.1.286; the function-hooks API is early access and may
+- Claude Code 2.1.273 or newer. The mod checks this before touching the journal. It was
+  tested against 2.1.273 through 2.1.287; the function-hooks API is early access and may
   change without notice, so newer releases are accepted but not guaranteed
 - `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the environment
-- if you already use the desktop app, Z Report 0.2.3 or later, opened once — only the
+- if you already use the desktop app, Z Report 0.2.3 or later, opened once. Only the
   desktop app upgrades an existing journal, so an older app is never locked out of it
 
-To install from a checkout:
+Released builds install from the public marketplace in
+[z-report-releases](https://github.com/alikayhan/z-report-releases):
+
+```sh
+claude plugin marketplace add alikayhan/z-report-releases
+claude plugin install z-report@z-report
+```
+
+To install from a checkout instead:
 
 ```sh
 npm run mod:package
@@ -158,7 +167,7 @@ claude plugin install z-report@z-report
 ## Privacy and network boundary
 
 - All product data (evidence, candidates, journal, settings) lives in
-  `~/Library/Application Support/com.alikayhan.zreport/` — SQLite, no accounts, no sync.
+  `~/Library/Application Support/com.alikayhan.zreport/` as SQLite. No accounts, no sync.
 - Z Report has **no backend, no analytics, and no telemetry**.
 - Two things leave your Mac, and nothing else:
   1. Each evaluation runs on **your own Claude Code account**, or on your Codex account
@@ -166,19 +175,19 @@ claude plugin install z-report@z-report
      package (session excerpts from both Claude Code and Codex, file paths, command
      results including those from delegated sub-sessions, the names of external tools
      used to change something, commit and pull request metadata) to Anthropic, or to
-     OpenAI for a Codex run — the same boundary as using that tool itself. Transcripts
+     OpenAI for a Codex run. It is the same boundary as using that tool itself. Transcripts
      from either tool are only ever read locally. This is disclosed in Settings.
      Arguments passed to external tools are never included, only the server and tool
      name.
   2. The updater asks GitHub for the latest release metadata about once a day.
      The request carries nothing about you or your work, and updates only install with
-     your confirmation — never while an evaluation is running.
+     your confirmation, never while an evaluation is running.
 - The evaluator is sandboxed: fresh ephemeral run, read-only tools (Claude Code:
   `Read,Grep,Glob`; Codex: `--sandbox read-only`), working directory containing only
   the evidence package, no session persistence, no user settings, and on Claude Code an
   optional per-run safety cap.
 - Prompt excerpts in evidence are optional (Settings → Privacy). Full transcripts
-  are never copied — only referenced. The retention setting governs the review queue:
+  are never copied, only referenced. The retention setting governs the review queue:
   unreviewed candidates age out, approved entries stay. Extracted session facts are
   kept for 90 days, and dropped once their transcript is gone. "Delete all data"
   erases everything.
@@ -218,11 +227,13 @@ The tag triggers `.github/workflows/release.yml`, which tests, builds
 `aarch64-apple-darwin`, signs, notarizes, and staples the app and DMG, and publishes the
 DMG, updater archive (`.app.tar.gz` + `.sig`), the notarized Claude Code mod archive,
 `latest.json`, and `checksums.txt` to the
-public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository.
-Installed apps discover the release through `latest.json`; Homebrew users get it once
-`Casks/z-report.rb` in [homebrew-tap](https://github.com/alikayhan/homebrew-tap) is
-bumped — the workflow's run summary includes a paste-ready Cask rendered from
-`packaging/homebrew/` with the new version and DMG SHA-256 filled in.
+public [z-report-releases](https://github.com/alikayhan/z-report-releases) repository,
+then rewrites that repository's `.claude-plugin/marketplace.json` to point at the new mod
+archive. Installed apps discover the release through `latest.json`, and the mod through
+the marketplace. Homebrew users get it once `Casks/z-report.rb` in
+[homebrew-tap](https://github.com/alikayhan/homebrew-tap) is bumped; the workflow's run
+summary includes a paste-ready Cask rendered from `packaging/homebrew/` with the new
+version and DMG SHA-256 filled in.
 
 Required GitHub Actions secrets:
 
@@ -248,7 +259,7 @@ Verified against Claude Code 2.1.215:
 
 - `claude -p --model claude-opus-5-5 --effort high --output-format json` returns a
   single JSON result whose `modelUsage` records the model that actually served the
-  run — stored with every evaluation.
+  run, stored with every evaluation.
 - `--json-schema` yields a validated `structured_output` object matching the
   achievement contract (no output parsing heuristics).
 - `--tools "Read,Grep,Glob" --disallowedTools ... --no-session-persistence
@@ -286,8 +297,8 @@ Verified against Codex CLI 0.152.1:
   20-session sample every session carried exactly one distinct title, re-emitted up to
   98 times. It describes the opening of the session, not its conclusion.
 - Connected-tool calls appear as `tool_use` blocks named `mcp__<server>__<tool>`, paired
-  with a `tool_result` the same way shell commands are. No field in the record — and no
-  cached server manifest — states whether a call is read-only, so the tool name is the
+  with a `tool_result` the same way shell commands are. No field in the record, and no
+  cached server manifest, states whether a call is read-only, so the tool name is the
   only local signal.
 - Delegated runs live in sibling files (`<session-id>/subagents/agent-*.jsonl`) whose
   records are flagged `isSidechain`. They are read alongside the parent transcript and
