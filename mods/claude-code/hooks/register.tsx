@@ -49,11 +49,6 @@ export const register: Register = (on) => {
     if (interactive && model) void model.auto();
     return result;
   });
-  on("classic.SessionStart", async ($, e, next) => {
-    const result = await next(e);
-    if (interactive && model && e.source === "resume") void model.auto();
-    return result;
-  });
   on("turn.complete", async ($, e, next) => {
     const result = await next(e);
     if (interactive && model) void model.auto();
